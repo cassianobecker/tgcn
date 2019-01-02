@@ -2,8 +2,7 @@
 from __future__ import absolute_import, division
 from __future__ import print_function
 from autograd.scipy.misc import logsumexp
-# from data import load_mnist
-
+from data import load_mnist
 
 # import data_mnist
 import matplotlib.pyplot as plt
@@ -27,6 +26,7 @@ def init_random_params(scale, layer_sizes, rs=npr.RandomState(0)):
              scale * rs.randn(n))      # bias vector
             for m, n in zip(layer_sizes[:-1], layer_sizes[1:])]
 
+
 def neural_net_predict(params, inputs):
     """Implements a deep neural network for classification.
        params is a list of (weights, bias) tuples.
@@ -37,15 +37,18 @@ def neural_net_predict(params, inputs):
         inputs = np.tanh(outputs)
     return outputs - logsumexp(outputs, axis=1, keepdims=True)
 
+
 def l2_norm(params):
     """Computes l2 norm of params by flattening them into a vector."""
     flattened, _ = flatten(params)
     return np.dot(flattened, flattened)
 
+
 def log_posterior(params, inputs, targets, L2_reg):
     log_prior = -L2_reg * l2_norm(params)
     log_lik = np.sum(neural_net_predict(params, inputs) * targets)
     return log_prior + log_lik
+
 
 def accuracy(params, inputs, targets):
     target_class    = np.argmax(targets, axis=1)
@@ -64,13 +67,16 @@ def accuracy_GCN(params, inputs, targets):
 def ReLU(x):
     return x * (x > 0)
 
+
 def dReLU(x):
     return 1. * (x > 0)
+
 
 def log_posterior_GCN(params, inputs, targets, L2_reg):
     log_prior = -L2_reg * l2_norm(params)
     log_lik = np.sum(nn_predict_GCN(params, inputs) * targets)
     return log_prior + log_lik
+
 
 def nn_predict_GCN(params, x):
 
@@ -177,8 +183,8 @@ def init_GCN_params_coarsen(L):
 
     return params, hyper
 
-# ####################################################################################
 
+# ####################################################################################
 
 def create_graph():
 
@@ -206,7 +212,7 @@ def create_graph():
     coarsening_levels = 4
 
     A = grid_graph(28, corners=False)
-    A = graph.replace_random_edges(A, 0)
+    # A = graph.replace_random_edges(A, 0)
     graphs, perm = coarsening.coarsen(A, levels=coarsening_levels, self_connections=False)
     L = [graph.laplacian(A, normalized=normalized_laplacian) for A in graphs]
     # graph.plot_spectrum(L)
@@ -215,28 +221,40 @@ def create_graph():
     return L, perm
 
 
+def get_MNIST_Data_Autograd(perm):
 
-def get_MNIST_DataTf(perm):
-
-    import os
-    dir_data = os.path.join('..', 'data', 'mnist')
-
-    from tensorflow.examples.tutorials.mnist import input_data
-    mnist = input_data.read_data_sets(dir_data, one_hot=True)
-
-    train_data = mnist.train.images.astype(np.float32)
-    val_data = mnist.validation.images.astype(np.float32)
-    test_data = mnist.test.images.astype(np.float32)
-    train_labels = mnist.train.labels
-    val_labels = mnist.validation.labels
-    test_labels = mnist.test.labels
+    N, train_data, train_labels, test_data, test_labels = load_mnist()
 
     train_data = coarsening.perm_data(train_data, perm)
-    val_data = coarsening.perm_data(val_data, perm)
     test_data = coarsening.perm_data(test_data, perm)
+
     del perm
 
-    return train_data, val_data, test_data, train_labels, val_labels, test_labels
+    return train_data, test_data, train_labels, test_labels
+
+
+# def get_MNIST_Data_Tf(perm):
+#
+#     import os
+#     dir_data = os.path.join('..', 'data', 'mnist')
+#
+#     from tensorflow.examples.tutorials.mnist import input_data
+#     mnist = input_data.read_data_sets(dir_data, one_hot=True)
+#
+#     train_data = mnist.train.images.astype(np.float32)
+#     val_data = mnist.validation.images.astype(np.float32)
+#     test_data = mnist.test.images.astype(np.float32)
+#     train_labels = mnist.train.labels
+#     val_labels = mnist.validation.labels
+#     test_labels = mnist.test.labels
+#
+#     train_data = coarsening.perm_data(train_data, perm)
+#     val_data = coarsening.perm_data(val_data, perm)
+#     test_data = coarsening.perm_data(test_data, perm)
+#     del perm
+#
+#     return train_data, test_data, train_labels, test_labels
+
 
 global hyper
 
@@ -249,14 +267,12 @@ if __name__ == '__main__':
     param_scale = 0.1
 
     # print("Loading training data...")
-    # N, train_images, train_labels, test_images, test_labels = load_mnist()
 
     L, perm = create_graph()
-    train_images, val_images, test_images, train_labels, val_labels, test_labels = get_MNIST_DataTf(perm)
+    # train_images1, test_images1, train_labels1, test_labels1 = get_MNIST_Data_Tf(perm)
+    train_images, test_images, train_labels, test_labels = get_MNIST_Data_Autograd(perm)
 
     num_batches = int(np.ceil(len(train_images) / batch_size))
-
-
 
     def batch_indices(iter):
         idx = iter % num_batches
@@ -268,8 +284,6 @@ if __name__ == '__main__':
             train_acc = accuracy(params, train_images, train_labels)
             test_acc  = accuracy(params, test_images, test_labels)
             print("{:15}|{:20}|{:20}".format(iter//num_batches, train_acc, test_acc))
-
-
 
 
     # ########### MLP ######################
