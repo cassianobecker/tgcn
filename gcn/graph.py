@@ -242,7 +242,7 @@ def chebyshev(L, X, K):
     """Return T_k X where T_k are the Chebyshev polynomials of order up to K.
     Complexity is O(KMN)."""
     M, N = X.shape
-    assert L.dtype == X.dtype
+    # assert L.dtype == X.dtype
 
     # L = rescale_L(L, lmax)
     # Xt = T @ X: MxM @ MxN.

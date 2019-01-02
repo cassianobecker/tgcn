@@ -58,7 +58,7 @@ def accuracy(params, inputs, targets):
 
 def accuracy_GCN(params, inputs, targets):
     target_class    = np.argmax(targets, axis=1)
-    predicted_class = np.argmax(nn_predict_GCN(params, inputs), axis=1)
+    predicted_class = np.argmax(nn_predict_GCN_cheb(params, inputs), axis=1)
     return np.mean(predicted_class == target_class)
 
 
@@ -74,7 +74,7 @@ def dReLU(x):
 
 def log_posterior_GCN(params, inputs, targets, L2_reg):
     log_prior = -L2_reg * l2_norm(params)
-    log_lik = np.sum(nn_predict_GCN(params, inputs) * targets)
+    log_lik = np.sum(nn_predict_GCN_cheb(params, inputs) * targets)
     return log_prior + log_lik
 
 
@@ -112,6 +112,61 @@ def nn_predict_GCN(params, x):
     return y
 
 
+
+def nn_predict_GCN_cheb(params, x):
+
+    N, M = x.shape
+    M = int(M)
+    # Transform to Chebyshev basis
+    xc = x.T
+
+    def chebyshev(x, L):
+        return graph.chebyshev(L, x, hyper['K'])
+
+    # xc = tf.py_func(chebyshev, [xc], [tf.float32])[0]
+    L = graph.rescale_L(hyper['L'][0], lmax=2)
+
+    xc = chebyshev(xc, L)
+
+    xc = xc.T  # N x M x K
+    xc = np.reshape(xc, [-1, hyper['K']])  # NM x K
+    # Filter
+
+    # W = self._weight_variable([self.K, self.F])
+    W1 = params['W1']
+
+    y = np.matmul(xc, W1)  # NM x F
+    y = np.reshape(y, [-1, M, hyper['F']])  # N x M x F
+    # Bias and non-linearity
+#            b = self._bias_variable([1, 1, self.F])
+#     b = self._bias_variable([1, M, self.F])
+    b1 = params['b1']
+    y += b1  # N x M x F
+
+    # pooling layer
+    # y2 = np.reshape(y, [y.shape[0], int(y.shape[1] / 2), 2, y.shape[2]])
+    # y2 = np.max(y2, axis=2)
+    # y2 = np.reshape(y2, [y2.shape[0], -1]).T
+    #
+    # chebyshev(y2, L[1])
+
+    # nonlinear layer
+    # y = ReLU(y)
+    y = np.tanh(y)
+
+    # dense layer
+    y = np.reshape(y, [-1, hyper['F']*hyper['NFEATURES']])
+    y = np.matmul(y, params['W2']) + params['b2']
+
+    # y = tf.nn.relu(y)
+    # W = self._weight_variable([self.F*M, NCLASSES])
+    # b = self._bias_variable([NCLASSES])
+    # y = tf.reshape(y, [-1, self.F*M])
+    # y = tf.matmul(y, W) + b
+
+    return y
+
+
 def create_sq_mesh(M, N):
     # adjacency matrix
     A = np.zeros((M * N, M * N))
@@ -134,6 +189,37 @@ def create_sq_mesh(M, N):
     return A
 
 
+
+
+def init_GCN_params_coarsen_cheb(L):
+
+    _, U = graph.fourier(L[0])
+
+    hyper = dict()
+    hyper['NFEATURES'] = U.shape[0]
+    hyper['NCLASSES'] = 10
+    hyper['F'] = 10
+    hyper['K'] = 15
+    hyper['U'] = U
+    hyper['L'] = L
+
+    params = dict()
+    # params['W1'] = np.random.randn(hyper['NFEATURES'], hyper['F'], 1)
+    params['W1'] = np.random.randn(hyper['K'], hyper['F'])
+    # params['b1'] = np.random.randn(1, hyper['F'], 1)
+    params['b1'] = np.random.randn(1, L[0].shape[0], hyper['F'])
+    params['W2'] = np.random.randn(hyper['F']*hyper['NFEATURES'], hyper['NCLASSES'])
+    params['b2'] = np.random.randn(hyper['NCLASSES'])
+
+    # params['W2'] = np.random.randn(hyper['F']*hyper['NFEATURES'], 100)
+    # params['b2'] = np.random.randn(100)
+    # params['W3'] = np.random.randn(100, hyper['NCLASSES'])
+    # params['b3'] = np.random.randn(hyper['NCLASSES'])
+
+    return params, hyper
+
+
+
 def init_GCN_params():
 
     A = scipy.sparse.csr_matrix(create_sq_mesh(28, 28))
@@ -145,6 +231,7 @@ def init_GCN_params():
     hyper['NCLASSES'] = 10
     hyper['F'] = 15
     hyper['U'] = U
+    hyper['L'] = L
 
     params = dict()
     params['W1'] = np.random.randn(hyper['NFEATURES'], hyper['F'], 1)
@@ -310,7 +397,8 @@ if __name__ == '__main__':
     # ############### GCN #################
 
     # init_params_GCN, hyper = init_GCN_params()
-    init_params_GCN, hyper = init_GCN_params_coarsen(L)
+    # init_params_GCN, hyper = init_GCN_params_coarsen(L)
+    init_params_GCN, hyper = init_GCN_params_coarsen_cheb(L)
 
     # idx = batch_indices(1)
 
