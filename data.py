@@ -14,6 +14,7 @@ def load_mnist():
     test_images  = partial_flatten(test_images)  / 255.0
     train_labels = one_hot(train_labels, 10)
     test_labels = one_hot(test_labels, 10)
+
     N_data = train_images.shape[0]
 
     return N_data, train_images, train_labels, test_images, test_labels

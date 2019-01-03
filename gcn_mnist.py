@@ -17,7 +17,7 @@ import gcn.coarsening as coarsening
 from autograd import grad
 from autograd.misc import flatten
 from autograd.misc.optimizers import adam
-
+from autograd.misc.optimizers import sgd
 
 def init_random_params(scale, layer_sizes, rs=npr.RandomState(0)):
     """Build a list of (weights, biases) tuples,
@@ -45,7 +45,7 @@ def l2_norm(params):
 
 
 def log_posterior(params, inputs, targets, L2_reg):
-    log_prior = -L2_reg * l2_norm(params)
+    log_prior = L2_reg * l2_norm(params)
     log_lik = np.sum(neural_net_predict(params, inputs) * targets)
     return log_prior + log_lik
 
@@ -73,10 +73,10 @@ def dReLU(x):
 
 
 def log_posterior_GCN(params, inputs, targets, L2_reg):
-    log_prior = -L2_reg * l2_norm(params)
+    log_prior = L2_reg * l2_norm(params)
     log_lik = np.sum(nn_predict_GCN_cheb(params, inputs) * targets)
     return log_prior + log_lik
-
+    # return log_lik
 
 def nn_predict_GCN(params, x):
 
@@ -98,8 +98,8 @@ def nn_predict_GCN(params, x):
     y += params['b1']  # NSAMPLES x NFILTERS x NFEATURES
 
     # nonlinear layer
-    # y = ReLU(y)
-    y = np.tanh(y)
+    y = ReLU(y)
+    # y = np.tanh(y)
 
     # dense layer
     y = np.reshape(y, [-1, hyper['F']*hyper['NFEATURES']])
@@ -109,7 +109,9 @@ def nn_predict_GCN(params, x):
     # y = np.tanh(y)
     # y = np.matmul(y, params['W3']) + params['b3']
 
-    return y
+    outputs = y
+
+    return outputs - logsumexp(outputs, axis=1, keepdims=True)
 
 
 
@@ -164,7 +166,9 @@ def nn_predict_GCN_cheb(params, x):
     # y = tf.reshape(y, [-1, self.F*M])
     # y = tf.matmul(y, W) + b
 
-    return y
+    outputs = y
+
+    return outputs - logsumexp(outputs, axis=1, keepdims=True)
 
 
 def create_sq_mesh(M, N):
@@ -198,18 +202,18 @@ def init_GCN_params_coarsen_cheb(L):
     hyper = dict()
     hyper['NFEATURES'] = U.shape[0]
     hyper['NCLASSES'] = 10
-    hyper['F'] = 10
-    hyper['K'] = 15
+    hyper['F'] = 15
+    hyper['K'] = 20
     hyper['U'] = U
     hyper['L'] = L
 
     params = dict()
     # params['W1'] = np.random.randn(hyper['NFEATURES'], hyper['F'], 1)
-    params['W1'] = np.random.randn(hyper['K'], hyper['F'])
+    params['W1'] = 1.*np.random.randn(hyper['K'], hyper['F'])
     # params['b1'] = np.random.randn(1, hyper['F'], 1)
-    params['b1'] = np.random.randn(1, L[0].shape[0], hyper['F'])
-    params['W2'] = np.random.randn(hyper['F']*hyper['NFEATURES'], hyper['NCLASSES'])
-    params['b2'] = np.random.randn(hyper['NCLASSES'])
+    params['b1'] = 1.*np.random.randn(1, L[0].shape[0], hyper['F'])
+    params['W2'] = 1.*np.random.randn(hyper['F']*hyper['NFEATURES'], hyper['NCLASSES'])
+    params['b2'] = 1.*np.random.randn(hyper['NCLASSES'])
 
     # params['W2'] = np.random.randn(hyper['F']*hyper['NFEATURES'], 100)
     # params['b2'] = np.random.randn(100)
@@ -234,10 +238,10 @@ def init_GCN_params():
     hyper['L'] = L
 
     params = dict()
-    params['W1'] = np.random.randn(hyper['NFEATURES'], hyper['F'], 1)
-    params['b1'] = np.random.randn(1, hyper['F'], 1)
-    params['W2'] = np.random.randn(hyper['F']*hyper['NFEATURES'], hyper['NCLASSES'])
-    params['b2'] = np.random.randn(hyper['NCLASSES'])
+    params['W1'] = 0.1*np.random.randn(hyper['NFEATURES'], hyper['F'], 1)
+    params['b1'] = 0.001*np.random.randn(1, hyper['F'], 1)
+    params['W2'] = 0.1*np.random.randn(hyper['F']*hyper['NFEATURES'], hyper['NCLASSES'])
+    params['b2'] = 0.001*np.random.randn(hyper['NCLASSES'])
 
     # params['W2'] = np.random.randn(hyper['F']*hyper['NFEATURES'], 100)
     # params['b2'] = np.random.randn(100)
@@ -258,10 +262,10 @@ def init_GCN_params_coarsen(L):
     hyper['U'] = U
 
     params = dict()
-    params['W1'] = np.random.randn(hyper['NFEATURES'], hyper['F'], 1)
-    params['b1'] = np.random.randn(1, hyper['F'], 1)
-    params['W2'] = np.random.randn(hyper['F']*hyper['NFEATURES'], hyper['NCLASSES'])
-    params['b2'] = np.random.randn(hyper['NCLASSES'])
+    params['W1'] = 0.1*np.random.randn(hyper['NFEATURES'], hyper['F'], 1)
+    params['b1'] = 0.1*np.random.randn(1, hyper['F'], 1)
+    params['W2'] = 0.1*np.random.randn(hyper['F']*hyper['NFEATURES'], hyper['NCLASSES'])
+    params['b2'] = 0.1*np.random.randn(hyper['NCLASSES'])
 
     # params['W2'] = np.random.randn(hyper['F']*hyper['NFEATURES'], 100)
     # params['b2'] = np.random.randn(100)
@@ -293,7 +297,7 @@ def create_graph():
         return A
 
 
-    number_edges= 8
+    number_edges= 12
     metric = 'euclidean'
     normalized_laplacian = True
     coarsening_levels = 4
@@ -311,6 +315,14 @@ def create_graph():
 def get_MNIST_Data_Autograd(perm):
 
     N, train_data, train_labels, test_data, test_labels = load_mnist()
+
+    idx_train = range(1, 2*512)
+    idx_test = range(1, 2*512)
+
+    train_data = train_data[idx_train]
+    train_labels = train_labels[idx_train]
+    test_data = test_data[idx_test]
+    test_labels = test_labels[idx_test]
 
     train_data = coarsening.perm_data(train_data, perm)
     test_data = coarsening.perm_data(test_data, perm)
@@ -348,9 +360,9 @@ global hyper
 if __name__ == '__main__':
 
     batch_size = 256
-    num_epochs = 25
-    step_size = 0.001
-    L2_reg = 1.0
+    num_epochs = 500
+    step_size = 0.005
+    L2_reg = 0.0
     param_scale = 0.1
 
     # print("Loading training data...")
@@ -370,7 +382,13 @@ if __name__ == '__main__':
         if iter % num_batches == 0:
             train_acc = accuracy(params, train_images, train_labels)
             test_acc  = accuracy(params, test_images, test_labels)
+
             print("{:15}|{:20}|{:20}".format(iter//num_batches, train_acc, test_acc))
+            flattened, _ = flatten(gradient)
+            nG = np.dot(flattened, flattened)
+            print('{:1.3e}'.format(nG))
+
+
 
 
     # ########### MLP ######################
@@ -378,7 +396,7 @@ if __name__ == '__main__':
     if False:
 
         # Model parameters
-        layer_sizes = [784, 200, 100, 10]
+        layer_sizes = [train_images[0].shape[0], 200, 100, 10]
 
         init_params = init_random_params(param_scale, layer_sizes)
 
@@ -408,12 +426,16 @@ if __name__ == '__main__':
         if iter % num_batches == 0:
             train_acc = accuracy_GCN(params, train_images, train_labels)
             test_acc  = accuracy_GCN(params, test_images, test_labels)
-            print("{:15}|{:20}|{:20}".format(iter//num_batches, train_acc, test_acc))
+            print("{:15}|{:20.6}|{:20.6}".format(iter//num_batches, train_acc, test_acc))
 
-            print('{:1.3e}'.format(np.linalg.norm(params['W1'])))
-            print('{:1.3e}'.format(np.linalg.norm(params['b1'])))
-            print('{:1.3e}'.format(np.linalg.norm(params['W2'])))
-            print('{:1.3e}'.format(np.linalg.norm(params['b2'])))
+            flattened, _ = flatten(gradient)
+            nG = np.dot(flattened, flattened)
+            print('{:1.3e}'.format(nG))
+
+            # print('{:1.3e}'.format(np.linalg.norm(params['W1'])))
+            # print('{:1.3e}'.format(np.linalg.norm(params['b1'])))
+            # print('{:1.3e}'.format(np.linalg.norm(params['W2'])))
+            # print('{:1.3e}'.format(np.linalg.norm(params['b2'])))
 
 
 
