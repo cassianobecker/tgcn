@@ -120,7 +120,7 @@ def layer_pool(y, level):
     return y
 
 
-def cheb_layer(params, x, level):
+def layer_cheb(params, x, level):
 
     # Transform to Chebyshev basis
     xc = x.T
@@ -155,7 +155,7 @@ def cheb_layer(params, x, level):
 
 
 def layer_macro(params, x, level):
-    y = cheb_layer(params, x, level)
+    y = layer_cheb(params, x, level)
     y = layer_pool(y, level)
     y = np.tanh(y)
     return y

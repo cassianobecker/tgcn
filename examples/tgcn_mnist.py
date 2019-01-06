@@ -35,6 +35,15 @@ def ReLU(x):
     return x * (x > 0)
 
 
+def layer_pool(y, level):
+    if level == 0:
+        y = np.reshape(y, [y.shape[0], int(y.shape[1] / 2), 2, y.shape[2]])
+    elif level == 1:
+        y = np.reshape(y, [y.shape[0], int(y.shape[1] / 2), 2, y.shape[2], y.shape[3]])
+    y = np.max(y, axis=2)
+    return y
+
+
 def nn_predict_tgcn_cheb(params, x):
 
     L = graph.rescale_L(hyper['L'][0], lmax=2)
@@ -45,11 +54,12 @@ def nn_predict_tgcn_cheb(params, x):
 
     # nonlinear layer
     y = np.tanh(y)
-    # y = ReLU(y)
+
+    y = layer_pool(y, 0)
 
     # dense layer
-    y = np.einsum('fnq,cfn->cq', y, params['W2'])
-    y += np.expand_dims(params['b2'], axis=1)
+    y = np.einsum('fnq,cfn->cq', y, params['W_dense'])
+    y += np.expand_dims(params['b_dense'], axis=1)
 
     outputs = np.real(y.T)
     return outputs - logsumexp(outputs, axis=1, keepdims=True)
@@ -90,14 +100,15 @@ def init_tgcn_params_coarsen_cheb(L, H):
     hyper['U'] = U
     hyper['L'] = L
     hyper['H'] = H
+    hyper['NMACROS'] = 1
 
     params = dict()
 
     params['W1'] = 1.*np.random.randn(hyper['K'], hyper['F'], hyper['H'])
     params['b1'] = 1.*np.random.randn(hyper['F'], hyper['N'])
 
-    params['W2'] = 1.*np.random.randn(hyper['NCLASSES'], hyper['F'], hyper['NFEATURES'])
-    params['b2'] = 1.*np.random.randn(hyper['NCLASSES'])
+    params['W_dense'] = 1.*np.random.randn(hyper['NCLASSES'], hyper['F'], int(hyper['NFEATURES']/(hyper['NMACROS']*2)))
+    params['b_dense'] = 1.*np.random.randn(hyper['NCLASSES'])
 
     return params, hyper
 
