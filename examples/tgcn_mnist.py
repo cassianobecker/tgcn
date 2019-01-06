@@ -9,7 +9,7 @@ from autograd import grad
 from autograd.misc import flatten
 from autograd.misc.optimizers import adam
 from autograd.scipy.misc import logsumexp
-from ..load.data import load_mnist
+from load.data import load_mnist
 
 
 def l2_norm(params):

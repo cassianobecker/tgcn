@@ -241,18 +241,43 @@ def rescale_L(L, lmax=2):
 def chebyshev(L, X, K):
     """Return T_k X where T_k are the Chebyshev polynomials of order up to K.
     Complexity is O(KMN)."""
-    M, N = X.shape
-    # assert L.dtype == X.dtype
+    dims = list(X.shape)
+    dims = tuple([K] + dims)
 
-    # L = rescale_L(L, lmax)
-    # Xt = T @ X: MxM @ MxN.
-    Xt = np.empty((K, M, N), L.dtype)
-    # Xt_0 = T_0 X = I X = X.
+    Xt = np.empty(dims, L.dtype)
+
+    try:
+        X = X._value
+    except:
+        pass
+
     Xt[0, ...] = X
-    # Xt_1 = T_1 X = L X.
-    if K > 1:
-        Xt[1, ...] = L.dot(X)
-    # Xt_k = 2 L Xt_k-1 - Xt_k-2.
-    for k in range(2, K):
-        Xt[k, ...] = 2 * L.dot(Xt[k-1, ...]) - Xt[k-2, ...]
-    return Xt
+
+    if len(dims) == 3:
+        # Xt_1 = T_1 X = L X.
+        if K > 1:
+            X = L.dot(X)
+            Xt[1, ...] = X
+        # Xt_k = 2 L Xt_k-1 - Xt_k-2.
+        for k in range(2, K):
+            X = L.dot(X)
+            Xt[k, ...] = 2 * X - Xt[k - 2, ...]
+        return Xt
+
+    else:
+
+        # Xt_1 = T_1 X = L X.
+        if K > 1:
+            sh = X.shape
+            X = X.reshape(X.shape[1], -1)
+            X = L.dot(X)
+            X = X.reshape(sh)
+            Xt[1, ...] = X
+        # Xt_k = 2 L Xt_k-1 - Xt_k-2.
+        for k in range(2, K):
+            X = Xt[k-1, ...]
+            X = X.reshape(X.shape[1], -1)
+            X = L.dot(X)
+            X = X.reshape(sh)
+            Xt[k, ...] = 2 * X - Xt[k-2, ...]
+        return Xt
