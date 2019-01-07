@@ -43,6 +43,46 @@ def layer_pool(y, level):
     y = np.max(y, axis=2)
     return y
 
+def layer_cheb(params, x, level):
+
+    # Transform to Chebyshev basis
+    xc = x.T
+
+    def chebyshev(x, L):
+        return graph.chebyshev(L, x, hyper['K'])
+
+    L = graph.rescale_L(hyper['L'][level], lmax=2)
+
+    xc = chebyshev(xc, L)
+    xc = xc.T
+
+    # Filter
+
+    if level == 0:
+        W = params['W1']
+        y = np.einsum('abc,ce->abe', xc, W)
+    if level == 1:
+        W = params['W2']
+        y = np.einsum('abcd,de->abce', xc, W)
+
+
+
+    # Bias and non-linearity
+    if level == 0:
+        b = params['b1']
+    if level == 1:
+        b = params['b2']
+    y += b  # N x M x F
+
+    return y
+
+def layer_macro(params, x, level):
+    y = layer_cheb(params, x, level)
+    y = layer_pool(y, level)
+    y = np.tanh(y)
+    return y
+
+
 
 def nn_predict_tgcn_cheb(params, x):
 
@@ -57,8 +97,18 @@ def nn_predict_tgcn_cheb(params, x):
 
     y = layer_pool(y, 0)
 
+
+    #chebyshev 2
+    y = y.T
+    y = layer_macro(params, y, 1)
+
+
+
+
+
     # dense layer
-    y = np.einsum('fnq,cfn->cq', y, params['W_dense'])
+    #y = np.einsum('fnq,cfn->cq', y, params['W_dense'])
+    y = np.einsum('abcd,ecdb->ea', y, params['W_dense'])
     y += np.expand_dims(params['b_dense'], axis=1)
 
     outputs = np.real(y.T)
@@ -96,18 +146,22 @@ def init_tgcn_params_coarsen_cheb(L, H):
     hyper['NCLASSES'] = 10
     hyper['N'] = L[0].shape[0]
     hyper['F'] = 15
+    hyper['F2'] = 5
     hyper['K'] = 10
     hyper['U'] = U
     hyper['L'] = L
     hyper['H'] = H
-    hyper['NMACROS'] = 1
+    hyper['NMACROS'] = 2
 
     params = dict()
 
     params['W1'] = 1.*np.random.randn(hyper['K'], hyper['F'], hyper['H'])
     params['b1'] = 1.*np.random.randn(hyper['F'], hyper['N'])
 
-    params['W_dense'] = 1.*np.random.randn(hyper['NCLASSES'], hyper['F'], int(hyper['NFEATURES']/(hyper['NMACROS']*2)))
+    params['W2'] = 1. * np.random.randn(hyper['K'], hyper['F2'])
+    params['b2'] = 1. * np.random.randn(1, L[1].shape[0], hyper['F'], hyper['F2'])
+
+    params['W_dense'] = 1.*np.random.randn(hyper['NCLASSES'], hyper['F'], hyper['F2'], int(hyper['NFEATURES']/(hyper['NMACROS']*2)))
     params['b_dense'] = 1.*np.random.randn(hyper['NCLASSES'])
 
     return params, hyper
@@ -147,13 +201,11 @@ def chebyshev_time_vertex(L, X, K):
     """Return T_k X where T_k are the Chebyshev polynomials of order up to K.
     Complexity is O(KMN)."""
     X = np.transpose(X, axes=[1, 2, 0])
-    M, N, Q = X.shape
-    Xt = np.empty((K, M, N, Q), dtype='complex')
-    # Xt[0, ...] = X
-    # if K > 1:
-    #     Xt[1, ...] = L.dot(X)
-    # for k in range(2, K):
-    #     Xt[k, ...] = 2 * L.dot(Xt[k-1, ...]) - Xt[k-2, ...]
+    dims = list(X.shape)
+    Q = dims[-1]
+    dims = tuple([K] + dims)
+    Xt = np.empty(dims, dtype='complex')
+
     for q in range(Q):
         Xt[0, :, :, q] = X[:, :, q]
         if K > 1:
