@@ -2,7 +2,7 @@
 from __future__ import absolute_import, division
 from __future__ import print_function
 from autograd.scipy.misc import logsumexp
-from load.data import load_mnist
+from data import load_mnist
 
 # import data_mnist
 import matplotlib.pyplot as plt
@@ -105,66 +105,70 @@ def nn_predict_GCN(params, x):
     y = np.reshape(y, [-1, hyper['F']*hyper['NFEATURES']])
     y = np.matmul(y, params['W2']) + params['b2']
 
-    # # y = ReLU(y)
-    # y = np.tanh(y)
-    # y = np.matmul(y, params['W3']) + params['b3']
 
     outputs = y
 
     return outputs - logsumexp(outputs, axis=1, keepdims=True)
 
 
+def layer_pool(y, level):
+    if level == 0:
+        y = np.reshape(y, [y.shape[0], int(y.shape[1] / 2), 2, y.shape[2]])
+    elif level == 1:
+        y = np.reshape(y, [y.shape[0], int(y.shape[1] / 2), 2, y.shape[2], y.shape[3]])
+    y = np.max(y, axis=2)
+    return y
 
-def nn_predict_GCN_cheb(params, x):
 
-    N, M = x.shape
-    M = int(M)
+def layer_cheb(params, x, level):
+
     # Transform to Chebyshev basis
     xc = x.T
 
     def chebyshev(x, L):
         return graph.chebyshev(L, x, hyper['K'])
 
-    # xc = tf.py_func(chebyshev, [xc], [tf.float32])[0]
-    L = graph.rescale_L(hyper['L'][0], lmax=2)
+    L = graph.rescale_L(hyper['L'][level], lmax=2)
 
     xc = chebyshev(xc, L)
+    xc = xc.T
 
-    xc = xc.T  # N x M x K
-    xc = np.reshape(xc, [-1, hyper['K']])  # NM x K
     # Filter
 
-    # W = self._weight_variable([self.K, self.F])
-    W1 = params['W1']
+    if level == 0:
+        W = params['W1']
+        y = np.einsum('abc,ce->abe', xc, W)
+    if level == 1:
+        W = params['W2']
+        y = np.einsum('abcd,de->abce', xc, W)
 
-    y = np.matmul(xc, W1)  # NM x F
-    y = np.reshape(y, [-1, M, hyper['F']])  # N x M x F
+
+
     # Bias and non-linearity
-#            b = self._bias_variable([1, 1, self.F])
-#     b = self._bias_variable([1, M, self.F])
-    b1 = params['b1']
-    y += b1  # N x M x F
+    if level == 0:
+        b = params['b1']
+    if level == 1:
+        b = params['b2']
+    y += b  # N x M x F
 
-    # pooling layer
-    y2 = np.reshape(y, [y.shape[0], int(y.shape[1] / 2), 2, y.shape[2]])
-    y2 = np.max(y2, axis=2)
-    y2 = np.reshape(y2, [y2.shape[0], -1]).T
-    #
-    # chebyshev(y2, L[1])
+    return y
 
-    # nonlinear layer
-    # y = ReLU(y)
+
+def layer_macro(params, x, level):
+    y = layer_cheb(params, x, level)
+    y = layer_pool(y, level)
     y = np.tanh(y)
+    return y
+
+
+def nn_predict_GCN_cheb(params, x):
+
+    y = layer_macro(params, x, 0)
+    y = layer_macro(params, y, 1)
 
     # dense layer
-    y = np.reshape(y, [-1, hyper['F']*hyper['NFEATURES']])
-    y = np.matmul(y, params['W2']) + params['b2']
-
-    # y = tf.nn.relu(y)
-    # W = self._weight_variable([self.F*M, NCLASSES])
-    # b = self._bias_variable([NCLASSES])
-    # y = tf.reshape(y, [-1, self.F*M])
-    # y = tf.matmul(y, W) + b
+    y = np.reshape(y, [-1, int(hyper['F2']*hyper['F']*hyper['NFEATURES']/(hyper['NMACROS']*2))])
+    y = np.matmul(y, params['W_dense']) + params['b_dense']
 
     outputs = y
 
@@ -203,22 +207,19 @@ def init_GCN_params_coarsen_cheb(L):
     hyper['NFEATURES'] = U.shape[0]
     hyper['NCLASSES'] = 10
     hyper['F'] = 15
+    hyper['F2'] = 5
     hyper['K'] = 20
     hyper['U'] = U
     hyper['L'] = L
+    hyper['NMACROS'] = 2
 
     params = dict()
-    # params['W1'] = np.random.randn(hyper['NFEATURES'], hyper['F'], 1)
     params['W1'] = 1.*np.random.randn(hyper['K'], hyper['F'])
-    # params['b1'] = np.random.randn(1, hyper['F'], 1)
     params['b1'] = 1.*np.random.randn(1, L[0].shape[0], hyper['F'])
-    params['W2'] = 1.*np.random.randn(hyper['F']*hyper['NFEATURES'], hyper['NCLASSES'])
-    params['b2'] = 1.*np.random.randn(hyper['NCLASSES'])
-
-    # params['W2'] = np.random.randn(hyper['F']*hyper['NFEATURES'], 100)
-    # params['b2'] = np.random.randn(100)
-    # params['W3'] = np.random.randn(100, hyper['NCLASSES'])
-    # params['b3'] = np.random.randn(hyper['NCLASSES'])
+    params['W2'] = 1. * np.random.randn(hyper['K'], hyper['F2'])
+    params['b2'] = 1. * np.random.randn(1, L[1].shape[0], hyper['F'], hyper['F2'])
+    params['W_dense'] = 1.*np.random.randn(int(hyper['F']*hyper['F2']*hyper['NFEATURES']/(hyper['NMACROS']*2)), hyper['NCLASSES'])
+    params['b_dense'] = 1.*np.random.randn(hyper['NCLASSES'])
 
     return params, hyper
 
@@ -243,11 +244,6 @@ def init_GCN_params():
     params['W2'] = 0.1*np.random.randn(hyper['F']*hyper['NFEATURES'], hyper['NCLASSES'])
     params['b2'] = 0.001*np.random.randn(hyper['NCLASSES'])
 
-    # params['W2'] = np.random.randn(hyper['F']*hyper['NFEATURES'], 100)
-    # params['b2'] = np.random.randn(100)
-    # params['W3'] = np.random.randn(100, hyper['NCLASSES'])
-    # params['b3'] = np.random.randn(hyper['NCLASSES'])
-
     return params, hyper
 
 
@@ -266,11 +262,6 @@ def init_GCN_params_coarsen(L):
     params['b1'] = 0.1*np.random.randn(1, hyper['F'], 1)
     params['W2'] = 0.1*np.random.randn(hyper['F']*hyper['NFEATURES'], hyper['NCLASSES'])
     params['b2'] = 0.1*np.random.randn(hyper['NCLASSES'])
-
-    # params['W2'] = np.random.randn(hyper['F']*hyper['NFEATURES'], 100)
-    # params['b2'] = np.random.randn(100)
-    # params['W3'] = np.random.randn(100, hyper['NCLASSES'])
-    # params['b3'] = np.random.randn(hyper['NCLASSES'])
 
     return params, hyper
 
@@ -316,8 +307,8 @@ def get_MNIST_Data_Autograd(perm):
 
     N, train_data, train_labels, test_data, test_labels = load_mnist()
 
-    idx_train = range(2*512)
-    idx_test = range(2*512)
+    idx_train = range(1, 2*512)
+    idx_test = range(1, 2*512)
 
     train_data = train_data[idx_train]
     train_labels = train_labels[idx_train]
@@ -330,29 +321,6 @@ def get_MNIST_Data_Autograd(perm):
     del perm
 
     return train_data, test_data, train_labels, test_labels
-
-
-# def get_MNIST_Data_Tf(perm):
-#
-#     import os
-#     dir_data = os.path.join('..', 'data', 'mnist')
-#
-#     from tensorflow.examples.tutorials.mnist import input_data
-#     mnist = input_data.read_data_sets(dir_data, one_hot=True)
-#
-#     train_data = mnist.train.images.astype(np.float32)
-#     val_data = mnist.validation.images.astype(np.float32)
-#     test_data = mnist.test.images.astype(np.float32)
-#     train_labels = mnist.train.labels
-#     val_labels = mnist.validation.labels
-#     test_labels = mnist.test.labels
-#
-#     train_data = coarsening.perm_data(train_data, perm)
-#     val_data = coarsening.perm_data(val_data, perm)
-#     test_data = coarsening.perm_data(test_data, perm)
-#     del perm
-#
-#     return train_data, test_data, train_labels, test_labels
 
 
 global hyper
@@ -414,13 +382,8 @@ if __name__ == '__main__':
 
     # ############### GCN #################
 
-    # init_params_GCN, hyper = init_GCN_params()
-    # init_params_GCN, hyper = init_GCN_params_coarsen(L)
     init_params_GCN, hyper = init_GCN_params_coarsen_cheb(L)
 
-    # idx = batch_indices(1)
-
-    # nn_predict_GCN(init_params_GCN, train_images[idx])
 
     def print_perf_GCN(params, iter, gradient):
         if iter % num_batches == 0:
