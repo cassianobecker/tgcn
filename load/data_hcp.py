@@ -1,5 +1,8 @@
 import numpy as np
 import scipy.io as sio
+import os
+from util.path import get_root
+import scipy.sparse
 
 
 def get_cues(MOTOR):
@@ -74,9 +77,21 @@ def get_delabeled_dataset(filedir, session, p=148, T=284):
     return [C, None, X]
 
 
-def get_dataset(filedir, session, p=32492, T=284):
-    with open(filedir + 'filenames.txt', 'r') as f:
-        filenames = [s.strip() for s in f.readlines()]
+def load_subjects(list_url):
+
+    with open(list_url, 'r') as f:
+        subjects = [s.strip() for s in f.readlines()]
+
+    return subjects
+
+
+
+def get_dataset(subjects, data_path, post_fix, session, p=32492, T=284):
+
+    # with open(list_url, 'r') as f:
+    #     filenames = [s.strip() + post_fix for s in f.readlines()]
+
+    filenames = [s + post_fix for s in subjects]
 
     Np = len(filenames)
     m = 5
@@ -88,26 +103,15 @@ def get_dataset(filedir, session, p=32492, T=284):
     X_bar = np.zeros([Np, p, T])
 
     for i, s in enumerate(filenames):
-        file = filedir + s
+        file = os.path.join(data_path, s)
         ds = sio.loadmat(file).get('ds')
         MOTOR = ds[0, 0][session]
 
         C_i = get_cues(MOTOR)
         X_i = get_bold(MOTOR)
 
-        X_i = X_i[:, :32492]
-
-        X_bar_i = X_i
-
-        if X_i.shape[1] == 32492:
-            C[i, :, :] = C_i
-            X[i, :, :] = X_i.transpose()
-            X_bar[i, :, :] = X_bar_i.transpose()
-        else:
-            mis_matched += 1
-
-    if mis_matched > 0:
-        print('num mismatched: {}'.format(mis_matched))
+        C[i, :, :] = C_i
+        X[i, :, :] = X_i.transpose()
 
     return [C, X, X_bar]
 
@@ -152,17 +156,62 @@ def encode(C, X, H, Gp, Gn):
 
     return [X_windowed, y]
 
-if __name__ == '__main__':
+
+def load_strucutural(subjects, file_url):
+
+    strut = sio.loadmat(file_url).get('strut')
+    strut_subs = [strut[0][0][2][i][0][0] for i in range(len(strut[0][0][2]))]
+
+    S = list()
+
+    for subject in subjects:
+        idx_subj = strut_subs.index(subject)
+        Si = strut[0][0][1][idx_subj][0]
+        S.append(scipy.sparse.csr_matrix(Si))
+
+    return S
+
+
+def load_hcp_example():
+
+    list_file = 'subjects_inter.txt'
+    list_url = os.path.join(get_root(), 'conf', list_file)
+    subjects_strut = load_subjects(list_url)
+
+    list_file = 'subjects_all.txt'
+    list_url = os.path.join(get_root(), 'conf', list_file)
+    subjects = load_subjects(list_url)
+
+    structural_file = 'struct_dti.mat'
+    structural_url = os.path.join(get_root(), 'load', 'hcpdata', structural_file)
+    S = load_strucutural(subjects_strut, structural_url)
+
+    data_path = '/Users/cassiano/Dropbox/cob/work/upenn/research/projects/tefemerid/code/v1/tfsid/out/data/hcp/many_motor'
+    post_fix = '_aparc_tasks.mat'
+    p = 148
+    T = 284
+    C, X, _ = get_dataset(subjects, data_path, post_fix, session='MOTOR_LR', p=p, T=T)
+
     H, Gp, Gn = 15, 4, 4
+    Xw, y = encode(C, X, H, Gp, Gn)
 
-    import os
+    N0 = np.nonzero(y == 0)[0].shape[0]
+    NN = int(np.nonzero(y > 0)[0].shape[0] / (np.unique(y).shape[0] - 1))
+    ididx = np.random.permutation(np.nonzero(y == 0)[0].shape[0])[0:N0 - NN]
+    idx = np.nonzero(y == 0)[0][ididx]
 
-    cwd = os.getcwd()
+    y = np.delete(y, idx, axis=0)
+    Xw = np.delete(Xw, idx, axis=0)
 
-    print(cwd)
+    one_hot = lambda x, k: np.array(x[:, None] == np.arange(k)[None, :], dtype=int)
 
-    res_path = '/Users/cassiano/Dropbox/cob/work/upenn/research/projects/tefemerid/code/v1/tfsid/out/data/hcp/many_motor'
+    k = np.max(np.unique(y))
 
-    fpath = '/Users/cassiano/Dropbox/cob/work/upenn/research/projects/defri/code/tgcn/mesh/fmri/all_subjects/'
-    C, _, X_bar = get_dataset(fpath, session='MOTOR_LR')
-    X, y = encode(C, X_bar, H, Gp, Gn)
+    yoh = one_hot(y, k+1)
+
+    return Xw, yoh, S
+
+
+if __name__ == '__main__':
+    load_hcp_example()
+
