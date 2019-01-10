@@ -142,8 +142,6 @@ def layer_cheb(params, x, level):
         W = params['W2']
         y = np.einsum('abcd,de->abce', xc, W)
 
-
-
     # Bias and non-linearity
     if level == 0:
         b = params['b1']
