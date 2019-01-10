@@ -35,7 +35,7 @@ class Net_gcn(nn.Module):
     def __init__(self, L):
         super(Net_gcn, self).__init__()
 
-        # construct gcn class - dimensions need to be fixed
+        # INITIALIZE GCN CLASS - dimensions need to be fixed
         self.gcn = GCNCheb(L, 28, 15, 10)
 
         self.conv1 = nn.Conv2d(1, 20, 5, 1)
@@ -44,7 +44,10 @@ class Net_gcn(nn.Module):
         self.fc2 = nn.Linear(500, 10)
 
     def forward(self, x):
+
+        # INVOKE FORWARD() method from GCNCheb LAYER
         x = self.gcn(x)
+
         x = F.relu(self.conv1(x))
         x = F.max_pool2d(x, 2, 2)
         x = F.relu(self.conv2(x))
@@ -169,10 +172,18 @@ def main():
         ])),
         batch_size=args.test_batch_size, shuffle=True, **kwargs)
 
+
+
+
+
+
+
     # model = Net().to(device)
     # L = np.random.rand(28, 28)
 
+    #### INITIALIZATION AND CONSTRUCTION OF GCN LAYER #######
     #### create LAPLACIAN and construct a Net_gcn
+
     L, perm = create_graph()
     model = Net_gcn(L[0]).to(device)
 
