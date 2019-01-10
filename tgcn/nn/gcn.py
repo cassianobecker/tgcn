@@ -16,7 +16,7 @@ class GCNCheb(torch.nn.Module):
         self.out_channels = out_channels
         self.weight = Parameter(torch.Tensor(K, in_channels, out_channels))
 
-        # ADD LAPLACIAN AS A MEMBER VARIABLE (need to work out which level)
+        # ADD LAPLACIAN AS A MEMBER VARIABLE
         self.L = L
 
         if bias:
