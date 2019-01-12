@@ -87,7 +87,7 @@ def uniform(size, tensor):
         tensor.data.uniform_(-stdv, stdv)
 
 
-def GCNPool(x):
+def gcn_pool(x):
     x = torch.reshape(x, [x.shape[0], int(x.shape[1] / 2), 2, x.shape[2]])
     x = torch.max(x, dim=2)[0]
     return x

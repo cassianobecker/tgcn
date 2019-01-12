@@ -277,7 +277,7 @@ if __name__ == '__main__':
     param_scale = 0.1
 
     L, perm = create_graph()
-    # train_images, test_images, train_labels, test_labels = get_mnist_data_autograd(perm)
+    # train_images, test_images, train_labels, test_labels = get_mnist_data_gcn(perm)
     train_images, test_images, train_labels, test_labels = get_mnist_time_data_autograd(perm)
 
     num_batches = int(np.ceil(len(train_images) / batch_size))

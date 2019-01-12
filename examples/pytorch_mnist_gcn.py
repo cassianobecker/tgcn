@@ -2,7 +2,7 @@ from __future__ import print_function
 import argparse
 import torch
 import torch.nn as nn
-from tgcn.nn.gcn import GCNCheb, GCNPool
+from tgcn.nn.gcn import GCNCheb, gcn_pool
 import torch.nn.functional as F
 import torch.optim as optim
 from torchvision import datasets, transforms
@@ -13,7 +13,7 @@ import gcn.graph as graph
 import gcn.coarsening as coarsening
 
 
-def get_MNIST_Data_Autograd(perm):
+def get_mnist_data_gcn(perm):
 
     N, train_data, train_labels, test_data, test_labels = load_mnist()
 
@@ -33,28 +33,30 @@ def get_MNIST_Data_Autograd(perm):
     return train_data, test_data, train_labels, test_labels
 
 
-class Net_gcn(nn.Module):
+class NetGCN(nn.Module):
 
     def __init__(self, L):
-        super(Net_gcn, self).__init__()
-        # Adding a graph convolution layer with first level Laplacian
-        # Initializing GCN class for layer 1
-        # k: # input filters, g: # output layers, k: # chebyshev coeff
-        f1, g1, k1 = 1, 15, 10
-        f2, g2, k2 = 15, 25, 10
-        n1 = L[0].shape[0]
-        n2 = L[1].shape[0]
-        c = 10
+        super(NetGCN, self).__init__()
+        # f: number of input filters
+        # g: number of output layers
+        # k: order of chebyshev polynomials
+        # c: number of classes
+        # n: number of vertices at coarsening level
 
-        self.L = L
-        self.gcn1 = GCNCheb(L[0], f1, g1, k1)    # f1, g1, k1: 1, 15, 10
-        self.gcn2 = GCNCheb(L[1], f2, g2, k2)   # f2, g2, k1: 15, 25, 10
+        f1, g1, k1 = 1, 15, 12
+        self.gcn1 = GCNCheb(L[0], f1, g1, k1)
+
+        n2 = L[1].shape[0]
+        f2, g2, k2 = 15, 25, 12
+        self.gcn2 = GCNCheb(L[1], f2, g2, k2)
+
+        c = 10
         self.fc1 = nn.Linear(n2 * g2, c)
 
     def forward(self, x):
         x = self.gcn1(x)
         x = F.relu(x)
-        x = GCNPool(x)
+        x = gcn_pool(x)
         x = self.gcn2(x)
         x = F.relu(x)
         x = x.view(x.shape[0], -1)
@@ -80,7 +82,6 @@ def create_graph():
 
         print("{} > {} edges".format(A.nnz // 2, number_edges * m ** 2 // 2))
         return A
-
 
     number_edges= 12
     metric = 'euclidean'
@@ -186,7 +187,7 @@ def main():
 
     L, perm = create_graph()
 
-    train_images, test_images, train_labels, test_labels = get_MNIST_Data_Autograd(perm)
+    train_images, test_images, train_labels, test_labels = get_mnist_data_gcn(perm)
 
     training_set = Dataset(train_images, train_labels)
     train_loader = torch.utils.data.DataLoader(training_set, batch_size=args.batch_size, **kwargs)
@@ -206,7 +207,7 @@ def main():
 
         m_tensor = torch.sparse.FloatTensor(i, v, torch.Size(shape)).to_dense()
         L_tensor.append(m_tensor)
-    model = Net_gcn(L_tensor).to(device)
+    model = NetGCN(L_tensor).to(device)
 
     optimizer = optim.SGD(model.parameters(), lr=args.lr, momentum=args.momentum)
 
@@ -214,7 +215,7 @@ def main():
         train(args, model, device, train_loader, optimizer, epoch)
         test(args, model, device, test_loader)
 
-    if (args.save_model):
+    if args.save_model:
         torch.save(model.state_dict(), "mnist_cnn.pt")
 
 
