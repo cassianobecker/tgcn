@@ -239,7 +239,7 @@ def rescale_L(L, lmax=2):
 
 
 def chebyshev(L, X, K):
-    """Return T_k X where T_k are the Chebyshev polynomials of order up to K.
+    """Return T_k X where T_k are the Chebyshev polynomials of order up to filter_order.
     Complexity is O(KMN)."""
     dims = list(X.shape)
     dims = tuple([K] + dims)

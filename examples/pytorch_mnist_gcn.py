@@ -2,7 +2,7 @@ from __future__ import print_function
 import argparse
 import torch
 import torch.nn as nn
-from tgcn.nn.gcn import GCNCheb
+from tgcn.nn.gcn import GCNCheb, GCNPool
 import torch.nn.functional as F
 import torch.optim as optim
 from torchvision import datasets, transforms
@@ -33,46 +33,37 @@ def get_MNIST_Data_Autograd(perm):
     return train_data, test_data, train_labels, test_labels
 
 
-def pool(x):
-    x = torch.reshape(x, [x.shape[0], int(x.shape[1] / 2), 2, x.shape[2]])
-    x = torch.max(x, dim=2)[0]
-    return x
-
-
 class Net_gcn(nn.Module):
 
     def __init__(self, L):
         super(Net_gcn, self).__init__()
-
         # Adding a graph convolution layer with first level Laplacian
         # Initializing GCN class for layer 1
-        # OTHER DIMENSIONS IN INITIALIZER NEED TO BE FIXED
+        # k: # input filters, g: # output layers, k: # chebyshev coeff
+        f1, g1, k1 = 1, 15, 10
+        f2, g2, k2 = 15, 25, 10
+        n1 = L[0].shape[0]
+        n2 = L[1].shape[0]
+        c = 10
+
         self.L = L
-        self.gcn1 = GCNCheb(L[0], 1, 15, 10)
-        self.gcn2 = GCNCheb(L[1], 15, 25, 10)
-        self.conv_count = 2
-
-        #self.conv1 = nn.Conv2d(1, 20, 5, 1)
-        #self.conv2 = nn.Conv2d(20, 50, 5, 1)
-
-        self.fc1 = nn.Linear(L[0].shape[0] * 25/(self.conv_count * 2), 500)
-        self.fc2 = nn.Linear(500, 10)
+        self.gcn1 = GCNCheb(L[0], f1, g1, k1)    # f1, g1, k1: 1, 15, 10
+        self.gcn2 = GCNCheb(L[1], f2, g2, k2)   # f2, g2, k1: 15, 25, 10
+        self.fc1 = nn.Linear(n2 * g2, c)
 
     def forward(self, x):
-
-        # INVOKE FORWARD() method from GCNCheb LAYER
-        x = pool(F.relu(self.gcn1(x)))
-        x = pool(F.relu(self.gcn2(x)))
-
-        x = x.view(-1, self.L[0].shape[0]/(self.conv_count * 2) * 25)
-        x = F.relu(self.fc1(x))
-        x = self.fc2(x)
+        x = self.gcn1(x)
+        x = F.relu(x)
+        x = GCNPool(x)
+        x = self.gcn2(x)
+        x = F.relu(x)
+        x = x.view(x.shape[0], -1)
+        x = self.fc1(x)
+        x = F.relu(x)
         return F.log_softmax(x, dim=1)
 
 
-
 def create_graph():
-
     def grid_graph(m, corners=False):
         z = graph.grid(m)
         dist, idx = graph.distance_sklearn_metrics(z, k=number_edges, metric=metric)
@@ -109,8 +100,6 @@ def create_graph():
 def train(args, model, device, train_loader, optimizer, epoch):
     model.train()
     for batch_idx, (data, target) in enumerate(train_loader):
-        #sh = data.shape
-        #data = data.view(sh[0], sh[2] * sh[3])
         data, target = data.to(device), target.to(device)
         optimizer.zero_grad()
         output = model(data)
@@ -130,9 +119,6 @@ def test(args, model, device, test_loader):
     correct = 0
     with torch.no_grad():
         for data, target in test_loader:
-            sh = data.shape
-            #data = data.view(sh[0], sh[2] * sh[3])
-            #data, target = data.to(device), target.to(device)
             output = model(data)
             target = torch.argmax(target, dim=1)
             test_loss += F.nll_loss(output, target, reduction='sum').item()  # sum up batch loss
@@ -153,8 +139,6 @@ class Dataset(torch.utils.data.Dataset):
         self.labels = labels
         self.list_IDs = list_IDs
 
-        #self.transform = transforms.ToTensor()
-
   def __len__(self):
         'Denotes the total number of samples'
         return len(self.list_IDs)
@@ -163,7 +147,6 @@ class Dataset(torch.utils.data.Dataset):
         'Generates one sample of data'
         # Select sample
         X = torch.tensor(self.list_IDs[index])
-
         # Load data and get label
         y = self.labels[index]
 
@@ -210,33 +193,6 @@ def main():
 
     validation_set = Dataset(test_images, test_labels)
     test_loader = torch.utils.data.DataLoader(validation_set, batch_size=args.batch_size, **kwargs)
-
-
-    # train_loader = torch.utils.data.DataLoader(
-    #     datasets.MNIST('../data', train=True, download=True,
-    #                    transform=transforms.Compose([
-    #                        transforms.ToTensor(),
-    #                        transforms.Normalize((0.1307,), (0.3081,))
-    #                    ])),
-    #     batch_size=args.batch_size, shuffle=True, **kwargs)
-    # test_loader = torch.utils.data.DataLoader(
-    #     datasets.MNIST('../data', train=False, transform=transforms.Compose([
-    #         transforms.ToTensor(),
-    #         transforms.Normalize((0.1307,), (0.3081,))
-    #     ])),
-    #     batch_size=args.test_batch_size, shuffle=True, **kwargs)
-
-
-
-
-
-
-
-    # model = Net().to(device)
-    # L = np.random.rand(28, 28)
-
-    #### INITIALIZATION AND CONSTRUCTION OF GCN LAYER #######
-    #### Create LAPLACIAN and construct a Net_gcn
 
     L_tensor = list()
     for m in L:

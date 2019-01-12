@@ -433,7 +433,7 @@ class lgcnn2_1(base_model):
             N, M, K = x.get_shape()  # N: number of samples, M: number of features
             M = int(M)
             # Transform to Lanczos basis
-            xl = tf.reshape(x, [-1, self.K])  # NM x K
+            xl = tf.reshape(x, [-1, self.K])  # NM x filter_order
             # Filter
             W = self._weight_variable([self.K, self.F])
             y = tf.matmul(xl, W)  # NM x F
@@ -466,8 +466,8 @@ class lgcnn2_2(base_model):
             def lanczos(x):
                 return graph.lanczos(self.L, x, self.K)
             xl = tf.py_func(lanczos, [xl], [tf.float32])[0]
-            xl = tf.transpose(xl)  # N x M x K
-            xl = tf.reshape(xl, [-1, self.K])  # NM x K
+            xl = tf.transpose(xl)  # N x M x filter_order
+            xl = tf.reshape(xl, [-1, self.K])  # NM x filter_order
             # Filter
             W = self._weight_variable([self.K, self.F])
             y = tf.matmul(xl, W)  # NM x F
@@ -501,8 +501,8 @@ class cgcnn2_2(base_model):
             def chebyshev(x):
                 return graph.chebyshev(self.L, x, self.K)
             xc = tf.py_func(chebyshev, [xc], [tf.float32])[0]
-            xc = tf.transpose(xc)  # N x M x K
-            xc = tf.reshape(xc, [-1, self.K])  # NM x K
+            xc = tf.transpose(xc)  # N x M x filter_order
+            xc = tf.reshape(xc, [-1, self.K])  # NM x filter_order
             # Filter
             W = self._weight_variable([self.K, self.F])
             y = tf.matmul(xc, W)  # NM x F
@@ -632,7 +632,7 @@ class cgcnn2_5(base_model):
             xt = tf.expand_dims(xt0, 0)  # 1 x M x N
             def concat(xt, x):
                 x = tf.expand_dims(x, 0)  # 1 x M x N
-                return tf.concat([xt, x], axis=0)  # K x M x N
+                return tf.concat([xt, x], axis=0)  # filter_order x M x N
             if self.K > 1:
                 xt1 = tf.sparse_tensor_dense_matmul(self.L, xt0)
                 xt = concat(xt, xt1)
@@ -640,8 +640,8 @@ class cgcnn2_5(base_model):
                 xt2 = 2 * tf.sparse_tensor_dense_matmul(self.L, xt1) - xt0  # M x N
                 xt = concat(xt, xt2)
                 xt0, xt1 = xt1, xt2
-            xt = tf.transpose(xt)  # N x M x K
-            xt = tf.reshape(xt, [-1,self.K])  # NM x K
+            xt = tf.transpose(xt)  # N x M x filter_order
+            xt = tf.reshape(xt, [-1,self.K])  # NM x filter_order
             # Filter
             W = self._weight_variable([self.K, self.F])
             y = tf.matmul(xt, W)  # NM x F
@@ -663,7 +663,7 @@ def bspline_basis(K, x, degree=3):
     """
     Return the B-spline basis.
 
-    K: number of control points.
+    filter_order: number of control points.
     x: evaluation points
        or number of evenly distributed evaluation points.
     degree: degree of the spline. Cubic spline by default.
@@ -708,7 +708,7 @@ class cgcnn(base_model):
     The following are hyper-parameters of graph convolutional layers.
     They are lists, which length is equal to the number of gconv layers.
         F: Number of features.
-        K: List of polynomial orders, i.e. filter sizes or number of hopes.
+        filter_order: List of polynomial orders, i.e. filter sizes or number of hopes.
         p: Pooling size.
            Should be 1 (no pooling) or a power of 2 (reduction by 2 at each coarser level).
            Beware to have coarsened enough.
@@ -839,8 +839,8 @@ class cgcnn(base_model):
         lamb, U = graph.fourier(L)
         U = tf.constant(U.T, dtype=tf.float32)  # M x M
         # Spline basis
-        B = bspline_basis(K, lamb, degree=3)  # M x K
-        #B = bspline_basis(K, len(lamb), degree=3)  # M x K
+        B = bspline_basis(K, lamb, degree=3)  # M x filter_order
+        #B = bspline_basis(filter_order, len(lamb), degree=3)  # M x filter_order
         B = tf.constant(B, dtype=tf.float32)
         # Weights
         W = self._weight_variable([K, Fout*Fin], regularization=False)
@@ -868,11 +868,11 @@ class cgcnn(base_model):
         x = tf.reshape(x, [M, Fin*N])  # M x Fin*N
         def chebyshev(x):
             return graph.chebyshev(L, x, K)
-        x = tf.py_func(chebyshev, [x], [tf.float32])[0]  # K x M x Fin*N
-        x = tf.reshape(x, [K, M, Fin, N])  # K x M x Fin x N
-        x = tf.transpose(x, perm=[3,1,2,0])  # N x M x Fin x K
-        x = tf.reshape(x, [N*M, Fin*K])  # N*M x Fin*K
-        # Filter: Fin*Fout filters of order K, i.e. one filterbank per feature.
+        x = tf.py_func(chebyshev, [x], [tf.float32])[0]  # filter_order x M x Fin*N
+        x = tf.reshape(x, [K, M, Fin, N])  # filter_order x M x Fin x N
+        x = tf.transpose(x, perm=[3,1,2,0])  # N x M x Fin x filter_order
+        x = tf.reshape(x, [N*M, Fin*K])  # N*M x Fin*filter_order
+        # Filter: Fin*Fout filters of order filter_order, i.e. one filterbank per feature.
         W = self._weight_variable([Fin*K, Fout], regularization=False)
         x = tf.matmul(x, W)  # N*M x Fout
         return tf.reshape(x, [N, M, Fout])  # N x M x Fout
@@ -893,7 +893,7 @@ class cgcnn(base_model):
         x = tf.expand_dims(x0, 0)  # 1 x M x Fin*N
         def concat(x, x_):
             x_ = tf.expand_dims(x_, 0)  # 1 x M x Fin*N
-            return tf.concat([x, x_], axis=0)  # K x M x Fin*N
+            return tf.concat([x, x_], axis=0)  # filter_order x M x Fin*N
         if K > 1:
             x1 = tf.sparse_tensor_dense_matmul(L, x0)
             x = concat(x, x1)
@@ -901,10 +901,10 @@ class cgcnn(base_model):
             x2 = 2 * tf.sparse_tensor_dense_matmul(L, x1) - x0  # M x Fin*N
             x = concat(x, x2)
             x0, x1 = x1, x2
-        x = tf.reshape(x, [K, M, Fin, N])  # K x M x Fin x N
-        x = tf.transpose(x, perm=[3,1,2,0])  # N x M x Fin x K
-        x = tf.reshape(x, [N*M, Fin*K])  # N*M x Fin*K
-        # Filter: Fin*Fout filters of order K, i.e. one filterbank per feature pair.
+        x = tf.reshape(x, [K, M, Fin, N])  # filter_order x M x Fin x N
+        x = tf.transpose(x, perm=[3,1,2,0])  # N x M x Fin x filter_order
+        x = tf.reshape(x, [N*M, Fin*K])  # N*M x Fin*filter_order
+        # Filter: Fin*Fout filters of order filter_order, i.e. one filterbank per feature pair.
         W = self._weight_variable([Fin*K, Fout], regularization=False)
         x = tf.matmul(x, W)  # N*M x Fout
         return tf.reshape(x, [N, M, Fout])  # N x M x Fout

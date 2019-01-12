@@ -126,7 +126,7 @@ def layer_cheb(params, x, level):
     xc = x.T
 
     def chebyshev(x, L):
-        return graph.chebyshev(L, x, hyper['K'])
+        return graph.chebyshev(L, x, hyper['filter_order'])
 
     L = graph.rescale_L(hyper['L'][level], lmax=2)
 
@@ -206,15 +206,15 @@ def init_GCN_params_coarsen_cheb(L):
     hyper['NCLASSES'] = 10
     hyper['F'] = 15
     hyper['F2'] = 5
-    hyper['K'] = 20
+    hyper['filter_order'] = 20
     hyper['U'] = U
     hyper['L'] = L
     hyper['NMACROS'] = 2
 
     params = dict()
-    params['W1'] = 1.*np.random.randn(hyper['K'], hyper['F'])
+    params['W1'] = 1.*np.random.randn(hyper['filter_order'], hyper['F'])
     params['b1'] = 1.*np.random.randn(1, L[0].shape[0], hyper['F'])
-    params['W2'] = 1. * np.random.randn(hyper['K'], hyper['F2'])
+    params['W2'] = 1. * np.random.randn(hyper['filter_order'], hyper['F2'])
     params['b2'] = 1. * np.random.randn(1, L[1].shape[0], hyper['F'], hyper['F2'])
     params['W_dense'] = 1.*np.random.randn(int(hyper['F']*hyper['F2']*hyper['NFEATURES']/(hyper['NMACROS']*2)), hyper['NCLASSES'])
     params['b_dense'] = 1.*np.random.randn(hyper['NCLASSES'])

@@ -43,7 +43,7 @@ def nn_predict_tgcn_cheb(params, x):
 
     L = graph.rescale_L(hyper['L'][0], lmax=2)
     w = np.fft.fft(x, axis=2)
-    xc = chebyshev_time_vertex(L, w, hyper['K'])
+    xc = chebyshev_time_vertex(L, w, hyper['filter_order'])
     y = np.einsum('knhq,kfh->fnq', xc, params['W1'])
     y += np.expand_dims(params['b1'], axis=2)
 
@@ -91,14 +91,14 @@ def init_tgcn_params_coarsen_cheb(L, H):
     hyper['NCLASSES'] = 6
     hyper['N'] = L[0].shape[0]
     hyper['F'] = 15
-    hyper['K'] = 10
+    hyper['filter_order'] = 10
     hyper['U'] = U
     hyper['L'] = L
     hyper['H'] = H
 
     params = dict()
 
-    params['W1'] = 1.*np.random.randn(hyper['K'], hyper['F'], hyper['H'])
+    params['W1'] = 1.*np.random.randn(hyper['filter_order'], hyper['F'], hyper['H'])
     params['b1'] = 1.*np.random.randn(hyper['F'], hyper['N'])
 
     params['W2'] = 1.*np.random.randn(hyper['NCLASSES'], hyper['F'], hyper['NFEATURES'])
@@ -138,15 +138,15 @@ def create_graph():
 
 
 def chebyshev_time_vertex(L, X, K):
-    """Return T_k X where T_k are the Chebyshev polynomials of order up to K.
+    """Return T_k X where T_k are the Chebyshev polynomials of order up to filter_order.
     Complexity is O(KMN)."""
     X = np.transpose(X, axes=[1, 2, 0])
     M, N, Q = X.shape
     Xt = np.empty((K, M, N, Q), dtype='complex')
     # Xt[0, ...] = X
-    # if K > 1:
+    # if filter_order > 1:
     #     Xt[1, ...] = L.dot(X)
-    # for k in range(2, K):
+    # for k in range(2, filter_order):
     #     Xt[k, ...] = 2 * L.dot(Xt[k-1, ...]) - Xt[k-2, ...]
     for q in range(Q):
         Xt[0, :, :, q] = X[:, :, q]

@@ -138,7 +138,7 @@ defvjp(anp.linspace, lambda ans, start, stop, num : lambda g: anp.dot(anp.linspa
                      lambda ans, start, stop, num : lambda g: anp.dot(anp.linspace(0.0, 1.0, num), g))
 
 defvjp(anp._astype,
-       lambda ans, A, dtype, order='K', casting='unsafe', subok=True, copy=True:
+       lambda ans, A, dtype, order='filter_order', casting='unsafe', subok=True, copy=True:
        lambda g: anp._astype(g, A.dtype))
 
 # ----- Trickier grads -----

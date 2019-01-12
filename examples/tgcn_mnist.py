@@ -49,7 +49,7 @@ def layer_cheb(params, x, level):
     xc = x.T
 
     def chebyshev(x, L):
-        return graph.chebyshev(L, x, hyper['K'])
+        return graph.chebyshev(L, x, hyper['filter_order'])
 
     L = graph.rescale_L(hyper['L'][level], lmax=2)
 
@@ -88,7 +88,7 @@ def nn_predict_tgcn_cheb(params, x):
 
     L = graph.rescale_L(hyper['L'][0], lmax=2)
     w = np.fft.fft(x, axis=2)
-    xc = chebyshev_time_vertex(L, w, hyper['K'])
+    xc = chebyshev_time_vertex(L, w, hyper['filter_order'])
     y = np.einsum('knhq,kfh->fnq', xc, params['W1'])
     y += np.expand_dims(params['b1'], axis=2)
 
@@ -147,7 +147,7 @@ def init_tgcn_params_coarsen_cheb(L, H):
     hyper['N'] = L[0].shape[0]
     hyper['F'] = 15
     hyper['F2'] = 5
-    hyper['K'] = 10
+    hyper['filter_order'] = 10
     hyper['U'] = U
     hyper['L'] = L
     hyper['H'] = H
@@ -155,10 +155,10 @@ def init_tgcn_params_coarsen_cheb(L, H):
 
     params = dict()
 
-    params['W1'] = 1.*np.random.randn(hyper['K'], hyper['F'], hyper['H'])
+    params['W1'] = 1.*np.random.randn(hyper['filter_order'], hyper['F'], hyper['H'])
     params['b1'] = 1.*np.random.randn(hyper['F'], hyper['N'])
 
-    params['W2'] = 1. * np.random.randn(hyper['K'], hyper['F2'])
+    params['W2'] = 1. * np.random.randn(hyper['filter_order'], hyper['F2'])
     params['b2'] = 1. * np.random.randn(1, L[1].shape[0], hyper['F'], hyper['F2'])
 
     params['W_dense'] = 1.*np.random.randn(hyper['NCLASSES'], hyper['F'], hyper['F2'], int(hyper['NFEATURES']/(hyper['NMACROS']*2)))
@@ -198,7 +198,7 @@ def create_graph():
 
 
 def chebyshev_time_vertex(L, X, K):
-    """Return T_k X where T_k are the Chebyshev polynomials of order up to K.
+    """Return T_k X where T_k are the Chebyshev polynomials of order up to filter_order.
     Complexity is O(KMN)."""
     X = np.transpose(X, axes=[1, 2, 0])
     dims = list(X.shape)

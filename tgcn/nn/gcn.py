@@ -9,16 +9,16 @@ import math
 
 class GCNCheb(torch.nn.Module):
 
-    def __init__(self, L, in_channels, out_channels, K, bias=True):
+    def __init__(self, L, in_channels, out_channels, filter_order, bias=True):
         super(GCNCheb, self).__init__()
 
         self.in_channels = in_channels
         self.out_channels = out_channels
-        self.weight = Parameter(torch.Tensor(K, in_channels, out_channels))
+        self.weight = Parameter(torch.Tensor(filter_order, in_channels, out_channels)) # tensor of dimensions k x f x g
 
         # ADD LAPLACIAN AS A MEMBER VARIABLE
         self.L = L
-        self.K = K
+        self.filter_order = filter_order
 
         if bias:
             self.bias = Parameter(torch.Tensor(1, L[0].shape[0], out_channels))
@@ -37,27 +37,8 @@ class GCNCheb(torch.nn.Module):
         """"""
         # Perform filter operation recurrently.
 
-        # NEED TO IMPLEMENT FORWARD OPERATION WITH CHEBYSHEV VIA SPARSE MULTIPLICATION (or dense in a first moment)
-        # MAYBE A CALL TO _chebyshev below
-
         xc = self._chebyshev(x)
-
-        # Tx_0 = x
-        # out = torch.mm(Tx_0, self.weight[0])
-        #
-        # if self.K > 1:
-        #     Tx_1 = spmm(edge_index, lap, num_nodes, x)
-        #     out = out + torch.mm(Tx_1, self.weight[1])
-        #
-        # for k in range(2, self.K):
-        #     Tx_2 = 2 * spmm(edge_index, lap, num_nodes, Tx_1) - Tx_0
-        #     out = out + torch.mm(Tx_2, self.weight[k])
-        #     Tx_0, Tx_1 = Tx_1, Tx_2
-        #
-        try:
-            out = torch.einsum("abc,ade->bce", xc, self.weight) #TODO: adjust for dimensions
-        except:
-            out = torch.einsum("abcd,ade->bce", xc, self.weight)
+        out = torch.einsum("kqnf,kfg->qng", xc, self.weight)
 
         if self.bias is not None:
             out = out + self.bias
@@ -65,48 +46,48 @@ class GCNCheb(torch.nn.Module):
         return out
 
     def __repr__(self):
-        return '{}({}, {}, K={})'.format(self.__class__.__name__,
+        return '{}({}, {}, filter_order={})'.format(self.__class__.__name__,
                                          self.in_channels, self.out_channels,
                                          self.weight.size(0))
 
 
-    # TRANSCRIBED METHOD FROM previous GCN operation (needs to be translated to PYTORCH)
     def _chebyshev(self, X):
-        """Return T_k X where T_k are the Chebyshev polynomials of order up to K.
-        Complexity is O(KMN)."""
+        """Return T_k X where T_k are the Chebyshev polynomials of order up to filter_order.
+        Complexity is O(KMN).
+        self.L: m x n laplacian
+        X: q (# examples) x n (vertex count of graph) x f (number of input filters)
+        Xt: tensor of dims k (order of chebyshev polynomials) x q x n x f
+        """
+
+        if len(list(X.shape)) == 2:
+            X = X.unsqueeze(2)
+
         dims = list(X.shape)
-        dims = tuple([self.K] + dims)
+        dims = tuple([self.filter_order] + dims)
 
         Xt = torch.empty(dims)
 
         Xt[0, ...] = X
 
-        if len(dims) == 3:
-            # Xt_1 = T_1 X = L X.
-            if self.K > 1:
-                X = torch.einsum("mn,qn->qm", self.L, X.float())    #TODO: fix dim names
-                Xt[1, ...] = X
-            # Xt_k = 2 L Xt_k-1 - Xt_k-2.
-            for k in range(2, self.K):
-                X = torch.einsum("mn,qn->qm", self.L, X.float())
-                Xt[k, ...] = 2 * X - Xt[k - 2, ...]
-            return Xt
-
-        elif len(dims) == 4:
-
-            # Xt_1 = T_1 X = L X.
-            if self.K > 1:
-                X = torch.einsum("ab,cbe->cae", self.L, X.float())
-                Xt[1, ...] = X
-            # Xt_k = 2 L Xt_k-1 - Xt_k-2.
-            for k in range(2, self.K):
-                #X = Xt[k - 1, ...]
-                X = torch.einsum("ab,cbe->cae", self.L, X.float())
-                Xt[k, ...] = 2 * X - Xt[k - 2, ...]
-            return Xt
+        # Xt_1 = T_1 X = L X.
+        if self.filter_order > 1:
+            X = torch.einsum("nm,qmf->qnf", self.L, X.float())
+            Xt[1, ...] = X
+        # Xt_k = 2 L Xt_k-1 - Xt_k-2.
+        for k in range(2, self.filter_order):
+            #X = Xt[k - 1, ...]
+            X = torch.einsum("nm,qmf->qnf", self.L, X.float())
+            Xt[k, ...] = 2 * X - Xt[k - 2, ...]
+        return Xt
 
 
 def uniform(size, tensor):
     stdv = 1.0 / math.sqrt(size)
     if tensor is not None:
         tensor.data.uniform_(-stdv, stdv)
+
+
+def GCNPool(x):
+    x = torch.reshape(x, [x.shape[0], int(x.shape[1] / 2), 2, x.shape[2]])
+    x = torch.max(x, dim=2)[0]
+    return x
