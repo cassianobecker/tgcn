@@ -7,28 +7,36 @@ import torch.nn.functional as F
 import torch.optim as optim
 from torchvision import datasets, transforms
 import numpy as np
+from data import load_mnist
 
 import gcn.graph as graph
 import gcn.coarsening as coarsening
 
 
-# class Net(nn.Module):
-#     def __init__(self):
-#         super(Net, self).__init__()
-#         self.conv1 = nn.Conv2d(1, 20, 5, 1)
-#         self.conv2 = nn.Conv2d(20, 50, 5, 1)
-#         self.fc1 = nn.Linear(4 * 4 * 50, 500)
-#         self.fc2 = nn.Linear(500, 10)
-#
-#     def forward(self, x):
-#         x = F.relu(self.conv1(x))
-#         x = F.max_pool2d(x, 2, 2)
-#         x = F.relu(self.conv2(x))
-#         x = F.max_pool2d(x, 2, 2)
-#         x = x.view(-1, 4 * 4 * 50)
-#         x = F.relu(self.fc1(x))
-#         x = self.fc2(x)
-#         return F.log_softmax(x, dim=1)
+def get_MNIST_Data_Autograd(perm):
+
+    N, train_data, train_labels, test_data, test_labels = load_mnist()
+
+    idx_train = range(1, 2*512)
+    idx_test = range(1, 2*512)
+
+    train_data = train_data[idx_train]
+    train_labels = train_labels[idx_train]
+    test_data = test_data[idx_test]
+    test_labels = test_labels[idx_test]
+
+    train_data = coarsening.perm_data(train_data, perm)
+    test_data = coarsening.perm_data(test_data, perm)
+
+    del perm
+
+    return train_data, test_data, train_labels, test_labels
+
+
+def pool(x):
+    x = torch.reshape(x, [x.shape[0], int(x.shape[1] / 2), 2, x.shape[2]])
+    x = torch.max(x, dim=2)[0]
+    return x
 
 
 class Net_gcn(nn.Module):
@@ -39,23 +47,24 @@ class Net_gcn(nn.Module):
         # Adding a graph convolution layer with first level Laplacian
         # Initializing GCN class for layer 1
         # OTHER DIMENSIONS IN INITIALIZER NEED TO BE FIXED
-        self.gcn1 = GCNCheb(L[0], 28, 15, 10)
+        self.L = L
+        self.gcn1 = GCNCheb(L[0], 1, 15, 10)
+        self.gcn2 = GCNCheb(L[1], 15, 25, 10)
+        self.conv_count = 2
 
-        self.conv1 = nn.Conv2d(1, 20, 5, 1)
-        self.conv2 = nn.Conv2d(20, 50, 5, 1)
-        self.fc1 = nn.Linear(4 * 4 * 50, 500)
+        #self.conv1 = nn.Conv2d(1, 20, 5, 1)
+        #self.conv2 = nn.Conv2d(20, 50, 5, 1)
+
+        self.fc1 = nn.Linear(L[0].shape[0] * 25/(self.conv_count * 2), 500)
         self.fc2 = nn.Linear(500, 10)
 
     def forward(self, x):
 
         # INVOKE FORWARD() method from GCNCheb LAYER
-        x = self.gcn1(x)
+        x = pool(F.relu(self.gcn1(x)))
+        x = pool(F.relu(self.gcn2(x)))
 
-        x = F.relu(self.conv1(x))
-        x = F.max_pool2d(x, 2, 2)
-        x = F.relu(self.conv2(x))
-        x = F.max_pool2d(x, 2, 2)
-        x = x.view(-1, 4 * 4 * 50)
+        x = x.view(-1, self.L[0].shape[0]/(self.conv_count * 2) * 25)
         x = F.relu(self.fc1(x))
         x = self.fc2(x)
         return F.log_softmax(x, dim=1)
@@ -100,9 +109,12 @@ def create_graph():
 def train(args, model, device, train_loader, optimizer, epoch):
     model.train()
     for batch_idx, (data, target) in enumerate(train_loader):
+        #sh = data.shape
+        #data = data.view(sh[0], sh[2] * sh[3])
         data, target = data.to(device), target.to(device)
         optimizer.zero_grad()
         output = model(data)
+        target = torch.argmax(target, dim=1)
         loss = F.nll_loss(output, target)
         loss.backward()
         optimizer.step()
@@ -118,8 +130,11 @@ def test(args, model, device, test_loader):
     correct = 0
     with torch.no_grad():
         for data, target in test_loader:
-            data, target = data.to(device), target.to(device)
+            sh = data.shape
+            #data = data.view(sh[0], sh[2] * sh[3])
+            #data, target = data.to(device), target.to(device)
             output = model(data)
+            target = torch.argmax(target, dim=1)
             test_loss += F.nll_loss(output, target, reduction='sum').item()  # sum up batch loss
             pred = output.max(1, keepdim=True)[1]  # get the index of the max log-probability
             correct += pred.eq(target.view_as(pred)).sum().item()
@@ -129,6 +144,30 @@ def test(args, model, device, test_loader):
     print('\nTest set: Average loss: {:.4f}, Accuracy: {}/{} ({:.0f}%)\n'.format(
         test_loss, correct, len(test_loader.dataset),
         100. * correct / len(test_loader.dataset)))
+
+
+class Dataset(torch.utils.data.Dataset):
+  'Characterizes a dataset for PyTorch'
+  def __init__(self, list_IDs, labels):
+        'Initialization'
+        self.labels = labels
+        self.list_IDs = list_IDs
+
+        #self.transform = transforms.ToTensor()
+
+  def __len__(self):
+        'Denotes the total number of samples'
+        return len(self.list_IDs)
+
+  def __getitem__(self, index):
+        'Generates one sample of data'
+        # Select sample
+        X = torch.tensor(self.list_IDs[index])
+
+        # Load data and get label
+        y = self.labels[index]
+
+        return X, y
 
 
 def main():
@@ -161,19 +200,31 @@ def main():
     device = torch.device("cuda" if use_cuda else "cpu")
 
     kwargs = {'num_workers': 1, 'pin_memory': True} if use_cuda else {}
-    train_loader = torch.utils.data.DataLoader(
-        datasets.MNIST('../data', train=True, download=True,
-                       transform=transforms.Compose([
-                           transforms.ToTensor(),
-                           transforms.Normalize((0.1307,), (0.3081,))
-                       ])),
-        batch_size=args.batch_size, shuffle=True, **kwargs)
-    test_loader = torch.utils.data.DataLoader(
-        datasets.MNIST('../data', train=False, transform=transforms.Compose([
-            transforms.ToTensor(),
-            transforms.Normalize((0.1307,), (0.3081,))
-        ])),
-        batch_size=args.test_batch_size, shuffle=True, **kwargs)
+
+    L, perm = create_graph()
+
+    train_images, test_images, train_labels, test_labels = get_MNIST_Data_Autograd(perm)
+
+    training_set = Dataset(train_images, train_labels)
+    train_loader = torch.utils.data.DataLoader(training_set, batch_size=args.batch_size, **kwargs)
+
+    validation_set = Dataset(test_images, test_labels)
+    test_loader = torch.utils.data.DataLoader(validation_set, batch_size=args.batch_size, **kwargs)
+
+
+    # train_loader = torch.utils.data.DataLoader(
+    #     datasets.MNIST('../data', train=True, download=True,
+    #                    transform=transforms.Compose([
+    #                        transforms.ToTensor(),
+    #                        transforms.Normalize((0.1307,), (0.3081,))
+    #                    ])),
+    #     batch_size=args.batch_size, shuffle=True, **kwargs)
+    # test_loader = torch.utils.data.DataLoader(
+    #     datasets.MNIST('../data', train=False, transform=transforms.Compose([
+    #         transforms.ToTensor(),
+    #         transforms.Normalize((0.1307,), (0.3081,))
+    #     ])),
+    #     batch_size=args.test_batch_size, shuffle=True, **kwargs)
 
 
 
@@ -186,8 +237,20 @@ def main():
 
     #### INITIALIZATION AND CONSTRUCTION OF GCN LAYER #######
     #### Create LAPLACIAN and construct a Net_gcn
-    L, perm = create_graph()
-    model = Net_gcn(L).to(device)
+
+    L_tensor = list()
+    for m in L:
+        coo = m.tocoo()
+        values = coo.data
+        indices = np.vstack((coo.row, coo.col))
+
+        i = torch.LongTensor(indices)
+        v = torch.FloatTensor(values)
+        shape = coo.shape
+
+        m_tensor = torch.sparse.FloatTensor(i, v, torch.Size(shape)).to_dense()
+        L_tensor.append(m_tensor)
+    model = Net_gcn(L_tensor).to(device)
 
     optimizer = optim.SGD(model.parameters(), lr=args.lr, momentum=args.momentum)
 
