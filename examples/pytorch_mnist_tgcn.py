@@ -2,156 +2,96 @@ from __future__ import print_function
 import argparse
 import torch
 import torch.nn as nn
-from tgcn.nn.gcn import GCNCheb, gcn_pool
+from tgcn.nn.gcn import TGCNCheb, TGCNCheb_H, gcn_pool
 import torch.nn.functional as F
 import torch.optim as optim
 from torchvision import datasets, transforms
 import numpy as np
+import autograd.numpy as npa
 from data import load_mnist
 
 import gcn.graph as graph
 import gcn.coarsening as coarsening
 
 
-def get_mnist_data_gcn(perm):
+def perm_data_time(x, indices):
+    """
+    Permute data matrix, i.e. exchange node ids,
+    so that binary unions form the clustering tree.
+    """
+    if indices is None:
+        return x
+
+    N, M, Q = x.shape
+    Mnew = len(indices)
+    assert Mnew >= M
+    xnew = np.empty((N, Mnew, Q))
+    for i,j in enumerate(indices):
+        # Existing vertex, i.e. real data.
+        if j < M:
+            xnew[:, i, :] = x[:, j, :]
+        # Fake vertex because of singeltons.
+        # They will stay 0 so that max pooling chooses the singelton.
+        # Or -infty ?
+        else:
+            xnew[:, i, :] = np.zeros((N, Q))
+    return xnew
+
+
+def get_mnist_data_tgcn(perm):
 
     N, train_data, train_labels, test_data, test_labels = load_mnist()
 
-    idx_train = range(1, 2*512)
-    idx_test = range(1, 2*512)
+    H = 12
+
+    train_data = np.transpose(np.tile(train_data, (H, 1, 1)), axes=[1, 2, 0])
+    test_data = np.transpose(np.tile(test_data, (H, 1, 1)), axes=[1, 2, 0])
+
+    idx_train = range(2*512)
+    idx_test = range(2*512)
 
     train_data = train_data[idx_train]
     train_labels = train_labels[idx_train]
     test_data = test_data[idx_test]
     test_labels = test_labels[idx_test]
 
-    train_data = coarsening.perm_data(train_data, perm)
-    test_data = coarsening.perm_data(test_data, perm)
+    train_data = perm_data_time(train_data, perm)
+    test_data = perm_data_time(test_data, perm)
 
     del perm
 
     return train_data, test_data, train_labels, test_labels
 
 
-class NetGCN(nn.Module):
+class NetTGCN(nn.Module):
 
     def __init__(self, L):
-        super(NetGCN, self).__init__()
+        super(NetTGCN, self).__init__()
         # f: number of input filters
         # g: number of output layers
         # k: order of chebyshev polynomials
         # c: number of classes
         # n: number of vertices at coarsening level
 
-        f1, g1, k1 = 1, 15, 12
-        self.gcn1 = GCNCheb(L[0], f1, g1, k1)
+        f1, g1, k1, h1 = 1, 15, 10, 12
+        self.tgcn1 = TGCNCheb_H(L[0], f1, g1, k1, h1)
 
-        g2, k2 = 25, 12
-        self.gcn2 = GCNCheb(L[1], g1, g2, k2)
-
-        n2 = L[1].shape[0]
-        c = 10
-        self.fc1 = nn.Linear(n2 * g2, c)
-
-
-    def forward(self, x):
-        x = self.gcn1(x)
-        x = F.relu(x)
-        x = gcn_pool(x)
-        x = self.gcn2(x)
-        x = F.relu(x)
-        x = x.view(x.shape[0], -1)
-        x = self.fc1(x)
-        x = F.relu(x)
-        return F.log_softmax(x, dim=1)
-
-
-class NetGCN_0(nn.Module):
-
-    def __init__(self, L):
-        super(NetGCN_0, self).__init__()
-        # f: number of input filters
-        # g: number of output layers
-        # k: order of chebyshev polynomials
-        # c: number of classes
-        # n: number of vertices at coarsening level
-
-        f1, g1, k1 = 1, 15, 12
-        self.gcn1 = GCNCheb(L[0], f1, g1, k1)
+        g2, k2 = 25, 10
+        self.tgcn2 = TGCNCheb(L[1], g1, g2, k2)
 
         n1 = L[0].shape[0]
+        n2 = L[1].shape[0]
         c = 10
         self.fc1 = nn.Linear(n1 * g1, c)
 
 
     def forward(self, x):
-        x = self.gcn1(x)
+        x = torch.tensor(npa.real(npa.fft.fft(x, axis=2)))
+        x = self.tgcn1(x)
         x = F.relu(x)
-        x = x.view(x.shape[0], -1)
-        x = self.fc1(x)
-        x = F.relu(x)
-        return F.log_softmax(x, dim=1)
-
-
-class NetGCN_1(nn.Module):
-
-    def __init__(self, L):
-        super(NetGCN_1, self).__init__()
-        # f: number of input filters
-        # g: number of output layers
-        # k: order of chebyshev polynomials
-        # c: number of classes
-        # n: number of vertices at coarsening level
-
-        f1, g1, k1 = 1, 15, 12
-        self.gcn1 = GCNCheb(L[0], f1, g1, k1)
-
-        f2, g2, k2 = 15, 5, 12
-        self.gcn2 = GCNCheb(L[1], f2, g2, k2)
-
-        n2 = L[1].shape[0]
-        c = 10
-        self.fc1 = nn.Linear(n2 * g2, c)
-
-
-    def forward(self, x):
-        x = self.gcn1(x)
-        x = F.relu(x)
-        x = gcn_pool(x)
-        x = self.gcn2(x)
-        x = F.relu(x)
-        x = x.view(x.shape[0], -1)
-        x = self.fc1(x)
-        x = F.relu(x)
-        return F.log_softmax(x, dim=1)
-
-
-class NetGCN_2(nn.Module):
-
-    def __init__(self, L):
-        super(NetGCN_2, self).__init__()
-        # f: number of input filters
-        # g: number of output layers
-        # k: order of chebyshev polynomials
-        # c: number of classes
-        # n: number of vertices at coarsening level
-
-        f1, g1, k1 = 1, 15, 12
-        self.gcn1 = GCNCheb(L[0], f1, g1, k1)
-
-        f2, g2, k2 = 15, 5, 12
-        self.gcn2 = GCNCheb(L[0], f2, g2, k2)
-
-        n2 = L[0].shape[0]
-        c = 10
-        self.fc1 = nn.Linear(n2 * g2, c)
-
-
-    def forward(self, x):
-        x = self.gcn1(x)
-        x = F.relu(x)
-        x = self.gcn2(x)
-        x = F.relu(x)
+        #x = gcn_pool(x)
+        #x = self.tgcn2(x)
+        #x = F.relu(x)
         x = x.view(x.shape[0], -1)
         x = self.fc1(x)
         x = F.relu(x)
@@ -280,7 +220,7 @@ def main():
 
     L, perm = create_graph()
 
-    train_images, test_images, train_labels, test_labels = get_mnist_data_gcn(perm)
+    train_images, test_images, train_labels, test_labels = get_mnist_data_tgcn(perm)
 
     training_set = Dataset(train_images, train_labels)
     train_loader = torch.utils.data.DataLoader(training_set, batch_size=args.batch_size, **kwargs)
@@ -300,7 +240,7 @@ def main():
 
         m_tensor = torch.sparse.FloatTensor(i, v, torch.Size(shape)).to_dense()
         L_tensor.append(m_tensor)
-    model = NetGCN_1(L_tensor).to(device)
+    model = NetTGCN(L_tensor).to(device)
 
     optimizer = optim.SGD(model.parameters(), lr=args.lr, momentum=args.momentum)
 
