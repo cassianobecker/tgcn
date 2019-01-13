@@ -1,8 +1,8 @@
 """A multi-layer perceptron for classification of MNIST handwritten digits."""
-from __future__ import absolute_import, division
-from __future__ import print_function
+# from __future__ import absolute_import, division
+# from __future__ import print_function
 from autograd.scipy.misc import logsumexp
-from data import load_mnist
+from load.data import load_mnist
 
 # import data_mnist
 import matplotlib.pyplot as plt
@@ -155,7 +155,8 @@ def layer_cheb(params, x, level):
 def layer_macro(params, x, level):
     y = layer_cheb(params, x, level)
     y = layer_pool(y, level)
-    y = np.tanh(y)
+    # y = np.tanh(y)
+    y = ReLU(y)
     return y
 
 
@@ -206,7 +207,7 @@ def init_GCN_params_coarsen_cheb(L):
     hyper['NCLASSES'] = 10
     hyper['F'] = 15
     hyper['F2'] = 5
-    hyper['filter_order'] = 20
+    hyper['filter_order'] = 2
     hyper['U'] = U
     hyper['L'] = L
     hyper['NMACROS'] = 2
@@ -305,8 +306,8 @@ def get_MNIST_Data_Autograd(perm):
 
     N, train_data, train_labels, test_data, test_labels = load_mnist()
 
-    idx_train = range(1, 2*512)
-    idx_test = range(1, 2*512)
+    idx_train = range(0, 20*512)
+    idx_test = range(0, 10*512)
 
     train_data = train_data[idx_train]
     train_labels = train_labels[idx_train]

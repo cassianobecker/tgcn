@@ -65,18 +65,19 @@ class GCNCheb(torch.nn.Module):
         dims = list(X.shape)
         dims = tuple([self.filter_order] + dims)
 
-        Xt = torch.empty(dims)
+        Xt = torch.empty(dims, dtype=torch.float).to(X.device)
 
         Xt[0, ...] = X
 
         # Xt_1 = T_1 X = L X.
+        # L = torch.Tensor(self.L)
         if self.filter_order > 1:
-            X = torch.einsum("nm,qmf->qnf", self.L, X.float())
+            X = torch.einsum("nm,qmf->qnf", self.L, X)
             Xt[1, ...] = X
         # Xt_k = 2 L Xt_k-1 - Xt_k-2.
         for k in range(2, self.filter_order):
             #X = Xt[k - 1, ...]
-            X = torch.einsum("nm,qmf->qnf", self.L, X.float())
+            X = torch.einsum("nm,qmf->qnf", self.L, X)
             Xt[k, ...] = 2 * X - Xt[k - 2, ...]
         return Xt
 
