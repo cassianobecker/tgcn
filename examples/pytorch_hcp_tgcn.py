@@ -137,6 +137,7 @@ class NetTGCN(nn.Module):
 
     def forward(self, x):
         x = torch.tensor(npa.real(npa.fft.fft(x.to('cpu').numpy(), axis=2))).to('cuda')
+        # x = torch.tensor(npa.real(npa.fft.fft(x.to('cpu').numpy(), axis=2))).to('cuda')
         x = self.tgcn1(x)
         x = F.relu(x)
         x = self.drop1(x)
