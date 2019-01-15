@@ -48,7 +48,6 @@ class NetGCN4(nn.Module):
         # k: order of chebyshev polynomial
         # c: number of classes
         # n: number of vertices at coarsening level
-
         super(NetGCN4, self).__init__()
 
         f1, g1, k1 = 1, 20, 5
