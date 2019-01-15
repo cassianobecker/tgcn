@@ -129,7 +129,7 @@ class TGCNCheb_H(torch.nn.Module):
     def _time_chebyshev(self, X):
         """Return T_k X where T_k are the Chebyshev polynomials of order up to filter_order.
         Complexity is O(KMN).
-        self.L: m x n laplacian
+        self.L: m x n Laplacian
         X: q (# examples) x n (vertex count of graph) x f (number of input filters)
         Xt: tensor of dims k (order of chebyshev polynomials) x q x n x f
         """
