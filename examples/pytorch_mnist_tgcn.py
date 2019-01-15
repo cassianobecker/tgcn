@@ -8,7 +8,8 @@ import torch.optim as optim
 from torchvision import datasets, transforms
 import numpy as np
 import autograd.numpy as npa
-from data import load_mnist
+from load.data import load_mnist
+import sklearn.metrics
 
 import gcn.graph as graph
 import gcn.coarsening as coarsening
@@ -47,8 +48,8 @@ def get_mnist_data_tgcn(perm):
     train_data = np.transpose(np.tile(train_data, (H, 1, 1)), axes=[1, 2, 0])
     test_data = np.transpose(np.tile(test_data, (H, 1, 1)), axes=[1, 2, 0])
 
-    idx_train = range(2*512)
-    idx_test = range(2*512)
+    idx_train = range(30*512)
+    idx_test = range(10*512)
 
     train_data = train_data[idx_train]
     train_labels = train_labels[idx_train]
@@ -67,6 +68,7 @@ class NetTGCN(nn.Module):
 
     def __init__(self, L):
         super(NetTGCN, self).__init__()
+
         # f: number of input filters
         # g: number of output layers
         # k: order of chebyshev polynomials
@@ -76,29 +78,21 @@ class NetTGCN(nn.Module):
         f1, g1, k1, h1 = 1, 15, 10, 12
         self.tgcn1 = TGCNCheb_H(L[0], f1, g1, k1, h1)
 
-        g2, k2 = 25, 10
-        self.tgcn2 = TGCNCheb(L[1], g1, g2, k2)
-
         n1 = L[0].shape[0]
-        n2 = L[1].shape[0]
         c = 10
         self.fc1 = nn.Linear(n1 * g1, c)
 
 
     def forward(self, x):
-        x = torch.tensor(npa.real(npa.fft.fft(x, axis=2)))
+        x = torch.tensor(npa.real(npa.fft.fft(x.to('cpu').numpy(), axis=2))).to('cuda')
         x = self.tgcn1(x)
         x = F.relu(x)
-        #x = gcn_pool(x)
-        #x = self.tgcn2(x)
-        #x = F.relu(x)
         x = x.view(x.shape[0], -1)
         x = self.fc1(x)
-        x = F.relu(x)
         return F.log_softmax(x, dim=1)
 
 
-def create_graph():
+def create_graph(device):
     def grid_graph(m, corners=False):
         z = graph.grid(m)
         dist, idx = graph.distance_sklearn_metrics(z, k=number_edges, metric=metric)
@@ -124,7 +118,9 @@ def create_graph():
     A = grid_graph(28, corners=False)
     # A = graph.replace_random_edges(A, 0)
     graphs, perm = coarsening.coarsen(A, levels=coarsening_levels, self_connections=False)
-    L = [graph.laplacian(A, normalized=normalized_laplacian) for A in graphs]
+    L = [torch.tensor(graph.rescale_L(graph.laplacian(A, normalized=normalized_laplacian).todense(), lmax=2),
+                      dtype=torch.float).to(device) for A in graphs]
+
     # graph.plot_spectrum(L)
     del A
 
@@ -151,12 +147,21 @@ def test(args, model, device, test_loader):
     model.eval()
     test_loss = 0
     correct = 0
+    cm = 0
+    preds = torch.empty(0, dtype=torch.long).to(device)
+    targets = torch.empty(0, dtype=torch.long).to(device)
     with torch.no_grad():
-        for data, target in test_loader:
+        for data_t, target_t in test_loader:
+            data = data_t.to(device)
+            target = target_t.to(device)
             output = model(data)
             target = torch.argmax(target, dim=1)
             test_loss += F.nll_loss(output, target, reduction='sum').item()  # sum up batch loss
             pred = output.max(1, keepdim=True)[1]  # get the index of the max log-probability
+            preds = torch.cat((pred, preds))
+            targets = torch.cat((target, targets))
+            # cm = sklearn.metrics.confusion_matrix(target, pred)
+            # cm += sklearn.metrics.confusion_matrix(target.to('cpu').numpy(), pred.to('cpu').numpy())
             correct += pred.eq(target.view_as(pred)).sum().item()
 
     test_loss /= len(test_loader.dataset)
@@ -164,25 +169,29 @@ def test(args, model, device, test_loader):
     print('\nTest set: Average loss: {:.4f}, Accuracy: {}/{} ({:.0f}%)\n'.format(
         test_loss, correct, len(test_loader.dataset),
         100. * correct / len(test_loader.dataset)))
+    # print(cm)
+    # print(cm.sum())
+    print(sklearn.metrics.classification_report(targets.to('cpu').numpy(), preds.to('cpu').numpy()))
 
 
 class Dataset(torch.utils.data.Dataset):
   'Characterizes a dataset for PyTorch'
-  def __init__(self, list_IDs, labels):
+  def __init__(self, images, labels):
         'Initialization'
         self.labels = labels
-        self.list_IDs = list_IDs
+        self.images = images
 
   def __len__(self):
         'Denotes the total number of samples'
-        return len(self.list_IDs)
+        return len(self.images)
 
   def __getitem__(self, index):
         'Generates one sample of data'
         # Select sample
-        X = torch.tensor(self.list_IDs[index])
+        # X = torch.tensor(self.images[index], dtype=torch.float)
+        X = self.images[index].astype('float32')
         # Load data and get label
-        y = self.labels[index]
+        y = self.labels[index].astype('float32')
 
         return X, y
 
@@ -216,31 +225,30 @@ def main():
 
     device = torch.device("cuda" if use_cuda else "cpu")
 
-    kwargs = {'num_workers': 1, 'pin_memory': True} if use_cuda else {}
-
-    L, perm = create_graph()
+    L, perm = create_graph(device)
 
     train_images, test_images, train_labels, test_labels = get_mnist_data_tgcn(perm)
 
     training_set = Dataset(train_images, train_labels)
-    train_loader = torch.utils.data.DataLoader(training_set, batch_size=args.batch_size, **kwargs)
+    train_loader = torch.utils.data.DataLoader(training_set, batch_size=args.batch_size)
 
     validation_set = Dataset(test_images, test_labels)
-    test_loader = torch.utils.data.DataLoader(validation_set, batch_size=args.batch_size, **kwargs)
+    test_loader = torch.utils.data.DataLoader(validation_set, batch_size=args.batch_size)
 
-    L_tensor = list()
-    for m in L:
-        coo = m.tocoo()
-        values = coo.data
-        indices = np.vstack((coo.row, coo.col))
+    # L_tensor = list()
+    # for m in L:
+    #     coo = m.tocoo()
+    #     values = coo.data
+    #     indices = np.vstack((coo.row, coo.col))
+    #
+    #     i = torch.LongTensor(indices)
+    #     v = torch.FloatTensor(values)
+    #     shape = coo.shape
+    #
+    #     m_tensor = torch.sparse.FloatTensor(i, v, torch.Size(shape)).to_dense()
+    #     L_tensor.append(m_tensor)
 
-        i = torch.LongTensor(indices)
-        v = torch.FloatTensor(values)
-        shape = coo.shape
-
-        m_tensor = torch.sparse.FloatTensor(i, v, torch.Size(shape)).to_dense()
-        L_tensor.append(m_tensor)
-    model = NetTGCN(L_tensor).to(device)
+    model = NetTGCN(L).to(device)
 
     optimizer = optim.SGD(model.parameters(), lr=args.lr, momentum=args.momentum)
 
