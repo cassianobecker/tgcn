@@ -3,7 +3,7 @@ import scipy.io as sio
 import os
 from util.path import get_root
 import scipy.sparse
-
+from os.path import expanduser
 
 def get_cues(MOTOR):
     C = MOTOR['ev_idx'][0, 0]
@@ -188,7 +188,7 @@ def load_hcp_example():
 
     # data_path = '/Users/cassiano/Dropbox/cob/work/upenn/research/projects/tefemerid/code/v1/tfsid/out/data/hcp/many_motor'
     # data_path = '~/data_hcp/'
-    data_path = '/home/cassiano_becker/data_hcp'
+    data_path = os.path.join(expanduser("~"), 'data_hcp')
     post_fix = '_aparc_tasks.mat'
     p = 148
     T = 284
