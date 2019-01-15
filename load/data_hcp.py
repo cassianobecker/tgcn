@@ -186,7 +186,9 @@ def load_hcp_example():
     structural_url = os.path.join(get_root(), 'load', 'hcpdata', structural_file)
     S = load_strucutural(subjects_strut, structural_url)
 
-    data_path = '/Users/cassiano/Dropbox/cob/work/upenn/research/projects/tefemerid/code/v1/tfsid/out/data/hcp/many_motor'
+    # data_path = '/Users/cassiano/Dropbox/cob/work/upenn/research/projects/tefemerid/code/v1/tfsid/out/data/hcp/many_motor'
+    # data_path = '~/data_hcp/'
+    data_path = '/home/cassiano_becker/data_hcp'
     post_fix = '_aparc_tasks.mat'
     p = 148
     T = 284
@@ -197,11 +199,12 @@ def load_hcp_example():
 
     N0 = np.nonzero(y == 0)[0].shape[0]
     NN = int(np.nonzero(y > 0)[0].shape[0] / (np.unique(y).shape[0] - 1))
+    print('Ratio of class imbalance: {}'.format(N0/NN))
     ididx = np.random.permutation(np.nonzero(y == 0)[0].shape[0])[0:N0 - NN]
     idx = np.nonzero(y == 0)[0][ididx]
 
-    y = np.delete(y, idx, axis=0)
-    Xw = np.delete(Xw, idx, axis=0)
+    # y = np.delete(y, idx, axis=0)
+    # Xw = np.delete(Xw, idx, axis=0)
 
     one_hot = lambda x, k: np.array(x[:, None] == np.arange(k)[None, :], dtype=int)
 
