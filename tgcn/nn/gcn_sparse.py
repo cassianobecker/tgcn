@@ -6,6 +6,8 @@ from torch.nn import Parameter
 # from ..inits import uniform
 
 import math
+import time
+import numpy as np
 
 
 class TGCNCheb(torch.nn.Module):
@@ -96,7 +98,7 @@ class TGCNCheb_H(torch.nn.Module):
         self.filter_order = filter_order
 
         if bias:
-            self.bias = Parameter(torch.Tensor(1, L[0].shape[0], out_channels))
+            self.bias = Parameter(torch.Tensor(1, self.L.shape[0], out_channels))
         else:
             self.register_parameter('bias', None)
 
@@ -146,12 +148,24 @@ class TGCNCheb_H(torch.nn.Module):
 
         # Xt_1 = T_1 X = L X.
         if self.filter_order > 1:
-            X = torch.einsum("nm,qmhf->qnhf", self.L, X)
+
+            X_perm = X.permute(1, 3, 2, 0)
+            X_temp = X_perm.reshape(X_perm.shape[0], -1)
+            res = torch.sparse.mm(self.L, X_temp)
+            res = res.reshape(X_perm.shape)
+            X = res.permute(3, 0, 2, 1)
+
             Xt[1, ...] = X
         # Xt_k = 2 L Xt_k-1 - Xt_k-2.
         for k in range(2, self.filter_order):
             #X = Xt[k - 1, ...]
-            X = torch.einsum("nm,qmhf->qnhf", self.L, X)
+
+            X_perm = X.permute(1, 3, 2, 0)
+            X_temp = X_perm.reshape(X_perm.shape[0], -1)
+            res = torch.sparse.mm(self.L, X_temp)
+            res = res.reshape(X_perm.shape)
+            X = res.permute(3, 0, 2, 1)
+
             Xt[k, ...] = 2 * X - Xt[k - 2, ...]
         return Xt
 
@@ -171,7 +185,7 @@ class GCNCheb(torch.nn.Module):
         self.filter_order = filter_order
 
         if bias:
-            self.bias = Parameter(torch.Tensor(1, L[0].shape[0], out_channels))
+            self.bias = Parameter(torch.Tensor(1, L.shape[0], out_channels))
         else:
             self.register_parameter('bias', None)
 
@@ -220,14 +234,25 @@ class GCNCheb(torch.nn.Module):
         Xt[0, ...] = X
 
         # Xt_1 = T_1 X = L X.
-        # L = torch.Tensor(self.L)
         if self.filter_order > 1:
-            X = torch.einsum("nm,qmf->qnf", self.L, X)
+
+            X_perm = X.permute(1, 2, 0)
+            X_temp = X_perm.reshape(X_perm.shape[0], -1)
+            res = torch.sparse.mm(self.L, X_temp)
+            res = res.reshape(X_perm.shape)
+            X = res.permute(2, 0, 1)
+
             Xt[1, ...] = X
         # Xt_k = 2 L Xt_k-1 - Xt_k-2.
         for k in range(2, self.filter_order):
             #X = Xt[k - 1, ...]
-            X = torch.einsum("nm,qmf->qnf", self.L, X)
+
+            X_perm = X.permute(1, 2, 0)
+            X_temp = X_perm.reshape(X_perm.shape[0], -1)
+            res = torch.sparse.mm(self.L, X_temp)
+            res = res.reshape(X_perm.shape)
+            X = res.permute(2, 0, 1)
+
             Xt[k, ...] = 2 * X - Xt[k - 2, ...]
         return Xt
 

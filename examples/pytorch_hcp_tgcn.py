@@ -2,7 +2,7 @@ from __future__ import print_function
 import argparse
 import torch
 import torch.nn as nn
-from tgcn.nn.gcn import TGCNCheb, TGCNCheb_H, GCNCheb, gcn_pool
+from tgcn.nn.gcn_sparse import TGCNCheb, TGCNCheb_H, GCNCheb, gcn_pool
 import torch.nn.functional as F
 import torch.optim as optim
 from torchvision import datasets, transforms
@@ -13,6 +13,7 @@ from load.data_hcp import load_hcp_example
 import gcn.graph as graph
 import gcn.coarsening as coarsening
 import sklearn.metrics
+from scipy.sparse import coo_matrix
 
 
 def perm_data_time(x, indices):
@@ -47,9 +48,21 @@ def load_hcp_tcgn(device):
     coarsening_levels = 4
 
     graphs, perm = coarsening.coarsen(As[0], levels=coarsening_levels, self_connections=False)
-    # L = [graph.laplacian(A, normalized=normalized_laplacian) for A in graphs]
     L = [torch.tensor(graph.rescale_L(graph.laplacian(A, normalized=normalized_laplacian).todense(), lmax=2),
                       dtype=torch.float).to(device) for A in graphs]
+
+    L_sparse = list()
+    for A in graphs:
+        g = graph.rescale_L(graph.laplacian(A, normalized=normalized_laplacian), lmax=2)
+        coo = coo_matrix(g)
+        values = coo.data
+        indices = np.vstack((coo.row, coo.col))
+        i = torch.LongTensor(indices)
+        v = torch.FloatTensor(values)
+        shape = coo.shape
+        a = torch.sparse.FloatTensor(i, v, torch.Size(shape))
+        a = a.to(device)
+        L_sparse.append(a)
 
     # idx_train = range(17*512)
     idx_train = range(int(0.8*time_series.shape[0]))
@@ -68,8 +81,12 @@ def load_hcp_tcgn(device):
     train_data = perm_data_time(train_data, perm)
     test_data = perm_data_time(test_data, perm)
 
-
-    return L, train_data, test_data, train_labels, test_labels
+    sparse = True
+    if sparse:
+        laplacian = L_sparse
+    else :
+        laplacian = L
+    return laplacian, train_data, test_data, train_labels, test_labels
 
 
 # def get_mnist_data_tgcn(perm):
@@ -209,7 +226,7 @@ def train(args, model, device, train_loader, optimizer, epoch):
                        100. * batch_idx / len(train_loader), loss.item()))
 
 
-def test(args, model, device, test_loader):
+def test(args, model, device, test_loader, t1):
     model.eval()
     test_loss = 0
     correct = 0
@@ -313,7 +330,6 @@ def main():
     device = torch.device("cuda" if use_cuda else "cpu")
 
     # kwargs = {'num_workers': 1, 'pin_memory': True} if use_cuda else {}
-    # X = torch.einsum("nm,qmhf->qnhf", self.L, X)
 
     L, train_images, test_images, train_labels, test_labels = load_hcp_tcgn(device)
 
