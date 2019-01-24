@@ -2,7 +2,7 @@ from __future__ import print_function
 import argparse
 import torch
 import torch.nn as nn
-from tgcn.nn.gcn_sparse import TGCNCheb, TGCNCheb_H, GCNCheb, gcn_pool
+from tgcn.nn.gcn import TGCNCheb, TGCNCheb_H, GCNCheb, gcn_pool
 import torch.nn.functional as F
 import torch.optim as optim
 from torchvision import datasets, transforms
@@ -14,6 +14,7 @@ import gcn.graph as graph
 import gcn.coarsening as coarsening
 import sklearn.metrics
 from scipy.sparse import coo_matrix
+import time
 
 
 def perm_data_time(x, indices):
@@ -81,37 +82,12 @@ def load_hcp_tcgn(device):
     train_data = perm_data_time(train_data, perm)
     test_data = perm_data_time(test_data, perm)
 
-    sparse = True
+    sparse = False
     if sparse:
         laplacian = L_sparse
     else :
         laplacian = L
     return laplacian, train_data, test_data, train_labels, test_labels
-
-
-# def get_mnist_data_tgcn(perm):
-#
-#     N, train_data, train_labels, test_data, test_labels = load_mnist()
-#
-#     H = 12
-#
-#     train_data = np.transpose(np.tile(train_data, (H, 1, 1)), axes=[1, 2, 0])
-#     test_data = np.transpose(np.tile(test_data, (H, 1, 1)), axes=[1, 2, 0])
-#
-#     idx_train = range(2*512)
-#     idx_test = range(2*512)
-#
-#     train_data = train_data[idx_train]
-#     train_labels = train_labels[idx_train]
-#     test_data = test_data[idx_test]
-#     test_labels = test_labels[idx_test]
-#
-#     train_data = perm_data_time(train_data, perm)
-#     test_data = perm_data_time(test_data, perm)
-#
-#     del perm
-#
-#     return train_data, test_data, train_labels, test_labels
 
 
 class NetTGCN(nn.Module):
@@ -150,11 +126,9 @@ class NetTGCN(nn.Module):
         self.fc2 = nn.Linear(d, c)
 
 
-
-
     def forward(self, x):
-        x = torch.tensor(npa.real(npa.fft.fft(x.to('cpu').numpy(), axis=2))).to('cuda')
-        # x = torch.tensor(npa.real(npa.fft.fft(x.to('cpu').numpy(), axis=2))).to('cuda')
+        #x = torch.tensor(npa.real(npa.fft.fft(x.to('cpu').numpy(), axis=2))).to('cuda')
+        x = torch.rfft(x, signal_ndim=1, onesided=False)[:, :, :, 0].to('cuda')
         x = self.tgcn1(x)
         x = F.relu(x)
         x = self.drop1(x)
@@ -252,30 +226,11 @@ def test(args, model, device, test_loader, t1):
     print('\nTest set: Average loss: {:.4f}, Accuracy: {}/{} ({:.0f}%)\n'.format(
         test_loss, correct, len(test_loader.dataset),
         100. * correct / len(test_loader.dataset)))
+    t2 = time.time()
+    print(t2-t1)
     print(cm)
     print(cm.sum())
     print(sklearn.metrics.classification_report(targets.to('cpu').numpy(), preds.to('cpu').numpy()))
-
-
-# class Dataset(torch.utils.data.Dataset):
-#   'Characterizes a dataset for PyTorch'
-#   def __init__(self, list_IDs, labels):
-#         'Initialization'
-#         self.labels = labels
-#         self.list_IDs = list_IDs
-#
-#   def __len__(self):
-#         'Denotes the total number of samples'
-#         return len(self.list_IDs)
-#
-#   def __getitem__(self, index):
-#         'Generates one sample of data'
-#         # Select sample
-#         X = torch.tensor(self.list_IDs[index])
-#         # Load data and get label
-#         y = self.labels[index]
-#
-#         return X, y
 
 
 class Dataset(torch.utils.data.Dataset):
@@ -357,8 +312,9 @@ def main():
     optimizer = optim.SGD(model.parameters(), lr=args.lr, momentum=args.momentum)
 
     for epoch in range(1, args.epochs + 1):
+        t1 = time.time()
         train(args, model, device, train_loader, optimizer, epoch)
-        test(args, model, device, test_loader)
+        test(args, model, device, test_loader, t1)
 
     if args.save_model:
         torch.save(model.state_dict(), "mnist_cnn.pt")

@@ -151,7 +151,7 @@ class TGCNCheb_H(torch.nn.Module):
 
             X_perm = X.permute(1, 3, 2, 0)
             X_temp = X_perm.reshape(X_perm.shape[0], -1)
-            res = torch.sparse.mm(self.L, X_temp)
+            res = torch.mm(self.L, X_temp)
             res = res.reshape(X_perm.shape)
             X = res.permute(3, 0, 2, 1)
 
@@ -162,7 +162,7 @@ class TGCNCheb_H(torch.nn.Module):
 
             X_perm = X.permute(1, 3, 2, 0)
             X_temp = X_perm.reshape(X_perm.shape[0], -1)
-            res = torch.sparse.mm(self.L, X_temp)
+            res = torch.mm(self.L, X_temp)
             res = res.reshape(X_perm.shape)
             X = res.permute(3, 0, 2, 1)
 
@@ -238,7 +238,7 @@ class GCNCheb(torch.nn.Module):
 
             X_perm = X.permute(1, 2, 0)
             X_temp = X_perm.reshape(X_perm.shape[0], -1)
-            res = torch.sparse.mm(self.L, X_temp)
+            res = torch.mm(self.L, X_temp)
             res = res.reshape(X_perm.shape)
             X = res.permute(2, 0, 1)
 
@@ -249,7 +249,7 @@ class GCNCheb(torch.nn.Module):
 
             X_perm = X.permute(1, 2, 0)
             X_temp = X_perm.reshape(X_perm.shape[0], -1)
-            res = torch.sparse.mm(self.L, X_temp)
+            res = torch.mm(self.L, X_temp)
             res = res.reshape(X_perm.shape)
             X = res.permute(2, 0, 1)
 
