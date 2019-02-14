@@ -185,7 +185,7 @@ class GCNCheb(torch.nn.Module):
         self.filter_order = filter_order
 
         if bias:
-            self.bias = Parameter(torch.Tensor(1, L.shape[0], out_channels))
+            self.bias = Parameter(torch.Tensor(1, 1, out_channels))
         else:
             self.register_parameter('bias', None)
 
@@ -230,6 +230,7 @@ class GCNCheb(torch.nn.Module):
         dims = tuple([self.filter_order] + dims)
 
         Xt = torch.empty(dims, dtype=torch.float).to(X.device)
+        L = self.L.to(X.device)
 
         Xt[0, ...] = X
 
@@ -238,7 +239,7 @@ class GCNCheb(torch.nn.Module):
 
             X_perm = X.permute(1, 2, 0)
             X_temp = X_perm.reshape(X_perm.shape[0], -1)
-            res = torch.mm(self.L, X_temp)
+            res = torch.mm(L, X_temp)
             res = res.reshape(X_perm.shape)
             X = res.permute(2, 0, 1)
 
@@ -249,7 +250,7 @@ class GCNCheb(torch.nn.Module):
 
             X_perm = X.permute(1, 2, 0)
             X_temp = X_perm.reshape(X_perm.shape[0], -1)
-            res = torch.mm(self.L, X_temp)
+            res = torch.mm(L, X_temp)
             res = res.reshape(X_perm.shape)
             X = res.permute(2, 0, 1)
 
@@ -265,5 +266,11 @@ def uniform(size, tensor):
 
 def gcn_pool(x):
     x = torch.reshape(x, [x.shape[0], int(x.shape[1] / 2), 2, x.shape[2]])
+    x = torch.max(x, dim=2)[0]
+    return x
+
+
+def gcn_pool_4(x):
+    x = torch.reshape(x, [x.shape[0], int(x.shape[1] / 4), 4, x.shape[2]])
     x = torch.max(x, dim=2)[0]
     return x

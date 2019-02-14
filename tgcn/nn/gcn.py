@@ -1,5 +1,5 @@
 import torch
-from torch.nn import Parameter
+from torch.nn import Parameter, init
 # from torch_sparse import spmm
 # from torch_geometric.utils import degree, remove_self_loops
 
@@ -171,7 +171,7 @@ class GCNCheb(torch.nn.Module):
         self.filter_order = filter_order
 
         if bias:
-            self.bias = Parameter(torch.Tensor(1, L[0].shape[0], out_channels))
+            self.bias = Parameter(torch.Tensor(1, 1, out_channels))
         else:
             self.register_parameter('bias', None)
 
@@ -181,6 +181,11 @@ class GCNCheb(torch.nn.Module):
         size = self.in_channels * self.weight.size(0)
         uniform(size, self.weight)
         uniform(size, self.bias)
+        # if self.bias is not None:
+        #     fan_in, _ = init._calculate_fan_in_and_fan_out(self.weight)
+        #     #bound = 1 / math.sqrt(fan_in)
+        #     #init.uniform_(self.bias, -bound, bound)
+        #     uniform(fan_in, self.bias)
 
 
     def forward(self, x):
@@ -189,6 +194,7 @@ class GCNCheb(torch.nn.Module):
 
         xc = self._chebyshev(x)
         out = torch.einsum("kqnf,kfg->qng", xc, self.weight)
+        #b = self.bias.cpu().detach().numpy()
 
         if self.bias is not None:
             out = out + self.bias
@@ -216,18 +222,19 @@ class GCNCheb(torch.nn.Module):
         dims = tuple([self.filter_order] + dims)
 
         Xt = torch.empty(dims, dtype=torch.float).to(X.device)
+        L = self.L.to(X.device)
 
         Xt[0, ...] = X
 
         # Xt_1 = T_1 X = L X.
         # L = torch.Tensor(self.L)
         if self.filter_order > 1:
-            X = torch.einsum("nm,qmf->qnf", self.L, X)
+            X = torch.einsum("nm,qmf->qnf", L, X)
             Xt[1, ...] = X
         # Xt_k = 2 L Xt_k-1 - Xt_k-2.
         for k in range(2, self.filter_order):
             #X = Xt[k - 1, ...]
-            X = torch.einsum("nm,qmf->qnf", self.L, X)
+            X = torch.einsum("nm,qmf->qnf", L, X)
             Xt[k, ...] = 2 * X - Xt[k - 2, ...]
         return Xt
 
@@ -240,5 +247,11 @@ def uniform(size, tensor):
 
 def gcn_pool(x):
     x = torch.reshape(x, [x.shape[0], int(x.shape[1] / 2), 2, x.shape[2]])
+    x = torch.max(x, dim=2)[0]
+    return x
+
+
+def gcn_pool_4(x):
+    x = torch.reshape(x, [x.shape[0], int(x.shape[1] / 4), 4, x.shape[2]])
     x = torch.max(x, dim=2)[0]
     return x
