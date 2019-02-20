@@ -69,7 +69,7 @@ class NetGCNBasic(nn.Module):
         # n: number of vertices at coarsening level
         super(NetGCNBasic, self).__init__()
 
-        f1, g1, k1 = 1, 10, 20
+        f1, g1, k1 = 1, 10, 25
         self.gcn1 = GCNCheb(L[0], f1, g1, k1)
 
         n1 = L[0].shape[0]
@@ -374,7 +374,7 @@ class Dataset(torch.utils.data.Dataset):
         # X = torch.tensor(self.images[index], dtype=torch.float)
         X = self.images[index].astype('float32')
         # Load data and get label
-        y = self.labels[index].astype('int32')
+        y = self.labels[index].astype('float32')
 
         return X, y
 
@@ -425,7 +425,7 @@ def experiment(args):
     #     m_tensor = torch.sparse.FloatTensor(i, v, torch.Size(shape)).to_dense()
     #     L_tensor.append(m_tensor)
 
-    model = NetGCN2Layer(L)
+    model = NetGCNBasic(L)
     if torch.cuda.device_count() > 1:
         model = torch.nn.DataParallel(model)
 

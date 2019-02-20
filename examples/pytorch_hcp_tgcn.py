@@ -262,7 +262,7 @@ def main():
                         help='input batch size for training (default: 64)')
     parser.add_argument('--test-batch-size', type=int, default=1000, metavar='N',
                         help='input batch size for testing (default: 1000)')
-    parser.add_argument('--epochs', type=int, default=50, metavar='N',
+    parser.add_argument('--epochs', type=int, default=20, metavar='N',
                         help='number of epochs to train (default: 10)')
     parser.add_argument('--lr', type=float, default=0.01, metavar='LR',
                         help='learning rate (default: 0.01)')
@@ -275,7 +275,7 @@ def main():
     parser.add_argument('--log-interval', type=int, default=10, metavar='N',
                         help='how many batches to wait before logging training status')
 
-    parser.add_argument('--save-model', action='store_true', default=False,
+    parser.add_argument('--save-model', action='store_true', default=True,
                         help='For Saving the current Model')
     args = parser.parse_args()
     use_cuda = not args.no_cuda and torch.cuda.is_available()
@@ -289,35 +289,30 @@ def main():
     L, train_images, test_images, train_labels, test_labels = load_hcp_tcgn(device)
 
     training_set = Dataset(train_images, train_labels)
-    train_loader = torch.utils.data.DataLoader(training_set, batch_size=args.batch_size)
+    train_loader = torch.utils.data.DataLoader(training_set, batch_size=args.batch_size, shuffle=False)
 
     validation_set = Dataset(test_images, test_labels)
-    test_loader = torch.utils.data.DataLoader(validation_set, batch_size=args.batch_size)
+    test_loader = torch.utils.data.DataLoader(validation_set, batch_size=args.batch_size, shuffle=False)
 
+    model = NetTGCN(L)
+    if torch.cuda.device_count() > 1:
+        model = torch.nn.DataParallel(model)
+    model.to(device)
 
-    # L_tensor = list()
-    # for m in L:
-    #     coo = m.tocoo()
-    #     values = coo.data
-    #     indices = np.vstack((coo.row, coo.col))
-    #
-    #     i = torch.LongTensor(indices)
-    #     v = torch.FloatTensor(values)
-    #     shape = coo.shape
-    #
-    #     m_tensor = torch.sparse.FloatTensor(i, v, torch.Size(shape)).to_dense()
-    #     L_tensor.append(m_tensor)
-    model = NetTGCN(L).to(device)
+    try:
+        model.load_state_dict(torch.load("hcp_cnn_1gpu2.pt"))
+        model.to(device)
+        model.eval()
+        test(args, model, device, test_loader, 0)
+    except:
+        optimizer = optim.SGD(model.parameters(), lr=args.lr, momentum=args.momentum)
+        for epoch in range(1, args.epochs + 1):
+            t1 = time.time()
+            train(args, model, device, train_loader, optimizer, epoch)
+            test(args, model, device, test_loader, t1)
 
-    optimizer = optim.SGD(model.parameters(), lr=args.lr, momentum=args.momentum)
-
-    for epoch in range(1, args.epochs + 1):
-        t1 = time.time()
-        train(args, model, device, train_loader, optimizer, epoch)
-        test(args, model, device, test_loader, t1)
-
-    if args.save_model:
-        torch.save(model.state_dict(), "mnist_cnn.pt")
+        if args.save_model:
+            torch.save(model.state_dict(), "hcp_cnn_1gpu2.pt")
 
 
 if __name__ == '__main__':

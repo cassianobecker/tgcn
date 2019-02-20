@@ -25,21 +25,23 @@ class Net(torch.nn.Module):
     def __init__(self, graphs, coos):
         super(Net, self).__init__()
 
-        f1, g1, k1 = graphs[0].shape[0], 10, 2
+        f1, g1, k1 = 1, 10, 2 #graphs[0].shape[0]
         self.conv1 = ChebConv(f1, g1, K=k1)
 
         #f2, g2, k2 = 1, 10, 20
         #self.conv2 = ChebConv(16, data.num_features, K=2)
-
-        self.fc1 = torch.nn.Linear(g1, 10)
+        n1 = graphs[0].shape[0]
+        self.fc1 = torch.nn.Linear(n1 * g1, 10)
 
         self.coos = coos
 
     def forward(self, x):
         x, edge_index = x, self.coos[0]
-        x = F.relu(self.conv1(x, edge_index))
+        x = self.conv1(x, edge_index)
+        x = F.relu(x)
         #x = F.dropout(x, training=self.training)
         #x = self.conv2(x, edge_index)
+        x = x.view(1, -1)
         x = self.fc1(x)
         return F.log_softmax(x, dim=1)
 
@@ -96,7 +98,7 @@ def train(args, model, device, train_loader, optimizer, epoch):
     #t1 = time.time()
     model.train()
     for batch_idx, (data_t, target_t) in enumerate(train_loader):
-        data = data_t.to(device)
+        data = data_t.permute(1, 0).to(device)
         target = target_t.to(device)
         optimizer.zero_grad()
         output = model(data)
@@ -107,13 +109,13 @@ def train(args, model, device, train_loader, optimizer, epoch):
                 loss = loss + args.reg_weight*(p[1]**2).sum()
         loss.backward()
         optimizer.step()
-        #if batch_idx % args.log_interval == 0:
+        if batch_idx % args.log_interval == 0:
 
-            #print('Gradient norm: {:2.4e}'.format(grad_norm(model)))
-            #
-            # print('Train Epoch: {} [{}/{} ({:.0f}%)]\tLoss: {:.6f}'.format(
-            #     epoch, batch_idx * len(data), len(train_loader.dataset),
-            #            100. * batch_idx / len(train_loader), loss.item()))
+            print('Gradient norm: {:2.4e}'.format(grad_norm(model)))
+
+            print('Train Epoch: {} [{}/{} ({:.0f}%)]\tLoss: {:.6f}'.format(
+                epoch, batch_idx * len(data), len(train_loader.dataset),
+                       100. * batch_idx / len(train_loader), loss.item()))
 
     torch.cuda.synchronize()
     #t2 = time.time()
@@ -129,7 +131,7 @@ def test(args, model, device, test_loader, epoch):
             # data = torch.tensor(data_t, dtype=torch.float).to(device)
             # target = torch.tensor(target_t, dtype=torch.float).to(device)
             # data, target = data.to(device), target.to(device)
-            data = data_t.to(device)
+            data = data_t.permute(1, 0).to(device)
             target = target_t.to(device)
             output = model(data)
             target = torch.argmax(target, dim=1)
@@ -224,7 +226,7 @@ def seed_everything(seed=1234):
 
 def main():
     parser = argparse.ArgumentParser(description='PyTorch MNIST Example')
-    parser.add_argument('--batch-size', type=int, default=976, metavar='N',
+    parser.add_argument('--batch-size', type=int, default=1, metavar='N',
                         help='input batch size for training (default: 64)')
     parser.add_argument('--test-batch-size', type=int, default=1000, metavar='N',
                         help='input batch size for testing (default: 1000)')
@@ -238,7 +240,7 @@ def main():
                         help='disables CUDA training')
     parser.add_argument('--seed', type=int, default=1, metavar='S',
                         help='random seed (default: 1)')
-    parser.add_argument('--log-interval', type=int, default=10, metavar='N',
+    parser.add_argument('--log-interval', type=int, default=1000, metavar='N',
                         help='how many batches to wait before logging training status')
 
     parser.add_argument('--save-model', action='store_true', default=False,

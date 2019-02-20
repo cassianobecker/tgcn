@@ -141,17 +141,18 @@ class TGCNCheb_H(torch.nn.Module):
         dims = tuple([self.filter_order] + dims)
 
         Xt = torch.empty(dims).to(X.device)
+        L = self.L.to(X.device)
 
         Xt[0, ...] = X
 
         # Xt_1 = T_1 X = L X.
         if self.filter_order > 1:
-            X = torch.einsum("nm,qmhf->qnhf", self.L, X)
+            X = torch.einsum("nm,qmhf->qnhf", L, X)
             Xt[1, ...] = X
         # Xt_k = 2 L Xt_k-1 - Xt_k-2.
         for k in range(2, self.filter_order):
             #X = Xt[k - 1, ...]
-            X = torch.einsum("nm,qmhf->qnhf", self.L, X)
+            X = torch.einsum("nm,qmhf->qnhf", L, X)
             Xt[k, ...] = 2 * X - Xt[k - 2, ...]
         return Xt
 
