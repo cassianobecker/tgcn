@@ -15,7 +15,7 @@ import gcn.coarsening as coarsening
 import scipy.sparse as sp
 import time, random, os
 from torch.nn import Parameter
-from torch_sparse import spmm
+#from torch_sparse import spmm
 from torch_geometric.utils import degree, remove_self_loops
 import math
 from torch_scatter import scatter_add
@@ -36,9 +36,9 @@ def spmm(index, value, m, matrix):
     row, col = index
     matrix = matrix if matrix.dim() > 1 else matrix.unsqueeze(-1)
 
-    out = matrix[col]
-    out = out * value.unsqueeze(-1)
-    out = scatter_add(out, row, dim=0, dim_size=m)
+    out = matrix[:, col]
+    out = torch.mul(out.permute(1, 0), value.unsqueeze(-1)).permute(1, 0)
+    out = scatter_add(out, row, dim=1, dim_size=m).unsqueeze(-1)
 
     return out
 
@@ -116,12 +116,12 @@ class ChebConv(torch.nn.Module):
 
         if K > 1:
             #Tx_1 = spmm(edge_index, lap, num_nodes, x)
-            Tx_1 = torch.stack([spmm(edge_index, lap, num_nodes, x[i].unsqueeze(-1)) for i in range(x.shape[0])])
+            Tx_1 = spmm(edge_index, lap, num_nodes, x)
             out = out + torch.matmul(Tx_1, self.weight[1])
 
         for k in range(2, K):
 
-            temp = torch.stack([spmm(edge_index, lap, num_nodes, Tx_1[i]) for i in range(x.shape[0])])
+            temp = spmm(edge_index, lap, num_nodes, torch.squeeze(Tx_1, dim=2))
             Tx_2 = 2 * temp - Tx_0
             out = out + torch.matmul(Tx_2, self.weight[k])
             Tx_0, Tx_1 = Tx_1, Tx_2
@@ -147,7 +147,7 @@ class Net(torch.nn.Module):
     def __init__(self, graphs, coos):
         super(Net, self).__init__()
 
-        f1, g1, k1 = 1, 10, 5 #graphs[0].shape[0]
+        f1, g1, k1 = 1, 10, 25 #graphs[0].shape[0]
         self.conv1 = ChebConv(f1, g1, K=k1)
 
         #f2, g2, k2 = 1, 10, 20
