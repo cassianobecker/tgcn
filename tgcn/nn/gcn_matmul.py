@@ -1,6 +1,6 @@
 import torch
 from torch.nn import Parameter
-# from torch_sparse import spmm
+# from torch_sparse import spmm_batch
 # from torch_geometric.utils import degree, remove_self_loops
 
 # from ..inits import uniform

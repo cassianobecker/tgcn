@@ -15,7 +15,7 @@ import gcn.coarsening as coarsening
 import scipy.sparse as sp
 import time, random, os
 from torch.nn import Parameter
-#from torch_sparse import spmm
+from torch_sparse import spmm
 from torch_geometric.utils import degree, remove_self_loops
 import math
 from torch_scatter import scatter_add
@@ -36,11 +36,44 @@ def spmm(index, value, m, matrix):
     row, col = index
     matrix = matrix if matrix.dim() > 1 else matrix.unsqueeze(-1)
 
+    out = matrix[col]
+    out = out.permute(-1, 0) * value
+    out = out.permute(-1, 0)
+    out = scatter_add(out, row, dim=0, dim_size=m)
+
+    return out
+
+
+def spmm_batch(index, value, m, matrix):
+    """Matrix product of sparse matrix with dense matrix.
+
+    Args:
+        index (:class:`LongTensor`): The index tensor of sparse matrix.
+        value (:class:`Tensor`): The value tensor of sparse matrix.
+        m (int): The first dimension of sparse matrix.
+        matrix (:class:`Tensor`): The dense matrix.
+
+    :rtype: :class:`Tensor`
+    """
+
+    row, col = index
+    matrix = matrix if matrix.dim() > 1 else matrix.unsqueeze(-1)
+
     out = matrix[:, col]
-    out = torch.mul(out.permute(1, 0), value.unsqueeze(-1)).permute(1, 0)
+    sh = out.shape[2]
+
+    out = out.permute(1, 2, 0)
+    out = torch.mul(out, value.repeat(-1, sh))
+    out = out.permute(1, 2, 0)
     out = scatter_add(out, row, dim=1, dim_size=m).unsqueeze(-1)
 
     return out
+
+
+def gcn_pool_4(x):
+    x = torch.reshape(x, [x.shape[0], int(x.shape[1] / 4), 4, x.shape[2]])
+    x = torch.max(x, dim=2)[0]
+    return x
 
 
 class ChebConv(torch.nn.Module):
@@ -111,17 +144,20 @@ class ChebConv(torch.nn.Module):
         lap = -deg[row] * edge_weight * deg[col]
 
         # Perform filter operation recurrently.
-        Tx_0 = x.unsqueeze(-1)
+        if len(x.shape) < 3:
+            Tx_0 = x.unsqueeze(-1)
+        else:
+            Tx_0 = x
         out = torch.matmul(Tx_0, self.weight[0])
 
         if K > 1:
-            #Tx_1 = spmm(edge_index, lap, num_nodes, x)
-            Tx_1 = spmm(edge_index, lap, num_nodes, x)
+            #Tx_1 = spmm_batch(edge_index, lap, num_nodes, x)
+            Tx_1 = torch.stack([spmm(edge_index, lap, num_nodes, Tx_0[i]) for i in range(x.shape[0])])
             out = out + torch.matmul(Tx_1, self.weight[1])
 
         for k in range(2, K):
 
-            temp = spmm(edge_index, lap, num_nodes, torch.squeeze(Tx_1, dim=2))
+            temp = torch.stack([spmm(edge_index, lap, num_nodes, Tx_1[i]) for i in range(x.shape[0])])
             Tx_2 = 2 * temp - Tx_0
             out = out + torch.matmul(Tx_2, self.weight[k])
             Tx_0, Tx_1 = Tx_1, Tx_2
@@ -147,13 +183,22 @@ class Net(torch.nn.Module):
     def __init__(self, graphs, coos):
         super(Net, self).__init__()
 
-        f1, g1, k1 = 1, 10, 25 #graphs[0].shape[0]
+        f1, g1, k1 = 1, 32, 25 #graphs[0].shape[0]
         self.conv1 = ChebConv(f1, g1, K=k1)
 
-        #f2, g2, k2 = 1, 10, 20
-        #self.conv2 = ChebConv(16, data.num_features, K=2)
-        n1 = graphs[0].shape[0]
-        self.fc1 = torch.nn.Linear(n1 * g1, 10)
+        f2, g2, k2 = 32, 64, 25
+        self.conv2 = ChebConv(f2, g2, K=k2)
+
+        n2 = graphs[2].shape[0]
+        #self.fc1 = torch.nn.Linear(n1 * g1, 10)
+
+        d = 512
+        self.fc1 = torch.nn.Linear(int(n2 * g2 / 4), d)
+
+        # self.drop = nn.Dropout(0)
+
+        c = 10
+        self.fc2 = torch.nn.Linear(d, c)
 
         self.coos = coos
 
@@ -161,10 +206,17 @@ class Net(torch.nn.Module):
         x, edge_index = x, self.coos[0]
         x = self.conv1(x, edge_index)
         x = F.relu(x)
-        #x = F.dropout(x, training=self.training)
-        #x = self.conv2(x, edge_index)
+        x = gcn_pool_4(x)
+
+        edge_index = self.coos[2]
+        x = self.conv2(x, edge_index)
+        x = F.relu(x)
+        x = gcn_pool_4(x)
+
         x = x.view(x.shape[0], -1)
         x = self.fc1(x)
+        x = F.relu(x)
+        x = self.fc2(x)
         return F.log_softmax(x, dim=1)
 
 
@@ -362,7 +414,7 @@ def main():
                         help='disables CUDA training')
     parser.add_argument('--seed', type=int, default=1, metavar='S',
                         help='random seed (default: 1)')
-    parser.add_argument('--log-interval', type=int, default=100, metavar='N',
+    parser.add_argument('--log-interval', type=int, default=10, metavar='N',
                         help='how many batches to wait before logging training status')
 
     parser.add_argument('--save-model', action='store_true', default=False,
