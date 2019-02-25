@@ -157,7 +157,7 @@ class ChebConv(torch.nn.Module):
         out = torch.matmul(Tx_0, self.weight[0])
 
         if K > 1:
-            Tx_1 = spmm_batch(edge_index, lap, num_nodes, x)
+            Tx_1 = spmm_batch(edge_index, lap, num_nodes, Tx_0)
             #Tx_1 = torch.stack([spmm(edge_index, lap, num_nodes, Tx_0[i]) for i in range(x.shape[0])])
             out = out + torch.matmul(Tx_1, self.weight[1])
 

@@ -19,6 +19,7 @@ from torch_sparse import spmm
 from torch_geometric.utils import degree, remove_self_loops
 import math
 from torch_scatter import scatter_add
+import autograd.numpy as npa
 
 
 def spmm(index, value, m, matrix):
@@ -44,7 +45,7 @@ def spmm(index, value, m, matrix):
     return out
 
 
-def spmm_batch(index, value, m, matrix):
+def spmm_batch_2(index, value, m, matrix):
     """Matrix product of sparse matrix with dense matrix.
 
     Args:
@@ -76,10 +77,142 @@ def spmm_batch(index, value, m, matrix):
     return out
 
 
+def spmm_batch_3(index, value, m, matrix):
+    """Matrix product of sparse matrix with dense matrix.
+
+    Args:
+        index (:class:`LongTensor`): The index tensor of sparse matrix.
+        value (:class:`Tensor`): The value tensor of sparse matrix.
+        m (int): The first dimension of sparse matrix.
+        matrix (:class:`Tensor`): The dense matrix.
+
+    :rtype: :class:`Tensor`
+    """
+
+    row, col = index
+    matrix = matrix if matrix.dim() > 1 else matrix.unsqueeze(-1)
+
+    out = matrix[:, col]
+    try:
+        sh = out.shape[3:]
+        sh = matrix.shape[2:]
+    except:
+        out = out.unsqueeze(-1)
+        sh = matrix.shape[2:]
+
+    #out = out.permute(1, 2, 0)
+    #out = torch.mul(out, value.repeat(-1, sh))
+    #out = out.permute(1, 2, 0)
+    sh = sh + (value.shape[0],)
+    temp = value.expand(sh)
+    temp = temp.permute(2, 0, 1)
+    out = torch.einsum("abcd,bcd->abcd", out, temp)
+    out = scatter_add(out, row, dim=1, dim_size=m)
+
+    return out
+
+
 def gcn_pool_4(x):
     x = torch.reshape(x, [x.shape[0], int(x.shape[1] / 4), 4, x.shape[2]])
     x = torch.max(x, dim=2)[0]
     return x
+
+
+class ChebConv(torch.nn.Module):
+    r"""The chebyshev spectral graph convolutional operator from the
+    `"Convolutional Neural Networks on Graphs with Fast Localized Spectral
+    Filtering" <https://arxiv.org/abs/1606.09375>`_ paper
+
+    .. math::
+        \mathbf{X}^{\prime} = \sum_{k=0}^{K-1} \mathbf{\hat{X}}_k \cdot
+        \mathbf{\Theta}_k
+
+    where :math:`\mathbf{\hat{X}}_k` is computed recursively by
+
+    .. math::
+        \mathbf{\hat{X}}_0 &= \mathbf{X}
+
+        \mathbf{\hat{X}}_1 &= \mathbf{\hat{L}} \cdot \mathbf{X}
+
+        \mathbf{\hat{X}}_k &= 2 \cdot \mathbf{\hat{L}} \cdot
+        \mathbf{\hat{X}}_{k-1} - \mathbf{\hat{X}}_{k-2}
+
+    and :math:`\mathbf{\hat{L}}` denotes the scaled and normalized Laplacian.
+
+    Args:
+        in_channels (int): Size of each input sample.
+        out_channels (int): Size of each output sample.
+        K (int): Chebyshev filter size, *i.e.* number of hops.
+        bias (bool, optional): If set to :obj:`False`, the layer will not learn
+            an additive bias. (default: :obj:`True`)
+    """
+
+    def __init__(self, in_channels, out_channels, K, bias=True):
+        super(ChebConv, self).__init__()
+
+        self.in_channels = in_channels
+        self.out_channels = out_channels
+        self.weight = Parameter(torch.Tensor(K, in_channels, out_channels))
+
+        if bias:
+            self.bias = Parameter(torch.Tensor(out_channels))
+        else:
+            self.register_parameter('bias', None)
+
+        self.reset_parameters()
+
+    def reset_parameters(self):
+        size = self.in_channels * self.weight.size(0)
+        uniform(size, self.weight)
+        uniform(size, self.bias)
+
+    def forward(self, x, edge_index, edge_weight=None):
+        """"""
+        edge_index, edge_weight = remove_self_loops(edge_index, edge_weight)
+
+        row, col = edge_index
+        num_nodes, num_edges, K = x.size(1), row.size(0), self.weight.size(0)
+
+        if edge_weight is None:
+            edge_weight = x.new_ones((num_edges, ))
+        edge_weight = edge_weight.view(-1)
+        assert edge_weight.size(0) == edge_index.size(1)
+
+        deg = degree(row, num_nodes, dtype=x.dtype)
+
+        # Compute normalized and rescaled Laplacian.
+        deg = deg.pow(-0.5)
+        deg[deg == float('inf')] = 0
+        lap = -deg[row] * edge_weight * deg[col]
+
+        # Perform filter operation recurrently.
+        if len(x.shape) < 3:
+            Tx_0 = x.unsqueeze(-1)
+        else:
+            Tx_0 = x
+        out = torch.matmul(Tx_0, self.weight[0])
+
+        if K > 1:
+            Tx_1 = spmm_batch_2(edge_index, lap, num_nodes, Tx_0)
+            #Tx_1 = torch.stack([spmm(edge_index, lap, num_nodes, Tx_0[i]) for i in range(x.shape[0])])
+            out = out + torch.matmul(Tx_1, self.weight[1])
+
+        for k in range(2, K):
+            temp = spmm_batch_2(edge_index, lap, num_nodes, Tx_1)
+            #temp = torch.stack([spmm(edge_index, lap, num_nodes, Tx_1[i]) for i in range(x.shape[0])])
+            Tx_2 = 2 * temp - Tx_0
+            out = out + torch.matmul(Tx_2, self.weight[k])
+            Tx_0, Tx_1 = Tx_1, Tx_2
+
+        if self.bias is not None:
+            out = out + self.bias
+
+        return out
+
+    def __repr__(self):
+        return '{}({}, {}, K={})'.format(self.__class__.__name__,
+                                         self.in_channels, self.out_channels,
+                                         self.weight.size(0))
 
 
 class ChebTimeConv(torch.nn.Module):
@@ -150,22 +283,21 @@ class ChebTimeConv(torch.nn.Module):
         lap = -deg[row] * edge_weight * deg[col]
 
         # Perform filter operation recurrently.
-        if len(x.shape) < 3:
+        if len(x.shape) < 4:
             Tx_0 = x.unsqueeze(-1)
         else:
             Tx_0 = x
-        out = torch.matmul(Tx_0, self.weight[0])
+        #out = torch.matmul(Tx_0, self.weight[0])
+        out = torch.einsum("qnhf,hfg->qng", Tx_0, self.weight[0])
 
         if K > 1:
-            Tx_1 = spmm_batch(edge_index, lap, num_nodes, x)
-            #Tx_1 = torch.stack([spmm(edge_index, lap, num_nodes, Tx_0[i]) for i in range(x.shape[0])])
-            out = out + torch.matmul(Tx_1, self.weight[1])
+            Tx_1 = spmm_batch_3(edge_index, lap, num_nodes, Tx_0)
+            out = out + torch.einsum("qnhf,hfg->qng", Tx_1, self.weight[1])
 
         for k in range(2, K):
-            temp = spmm_batch(edge_index, lap, num_nodes, Tx_1)
-            #temp = torch.stack([spmm(edge_index, lap, num_nodes, Tx_1[i]) for i in range(x.shape[0])])
+            temp = spmm_batch_3(edge_index, lap, num_nodes, Tx_1)
             Tx_2 = 2 * temp - Tx_0
-            out = out + torch.matmul(Tx_2, self.weight[k])
+            out = out + torch.einsum("qnhf,hfg->qng", Tx_2, self.weight[k])
             Tx_0, Tx_1 = Tx_1, Tx_2
 
         if self.bias is not None:
@@ -179,51 +311,22 @@ class ChebTimeConv(torch.nn.Module):
                                          self.weight.size(0))
 
 
-
 def uniform(size, tensor):
     stdv = 1.0 / math.sqrt(size)
     if tensor is not None:
         tensor.data.uniform_(-stdv, stdv)
 
 
-class NetGCNBasic(torch.nn.Module):
-
-    def __init__(self, L):
-
-        # f: number of input filters
-        # g: number of output filters
-        # k: order of chebyshev polynomial
-        # c: number of classes
-        # n: number of vertices at coarsening level
-        super(NetGCNBasic, self).__init__()
-
-        f1, g1, k1 = 1, 32, 25  # graphs[0].shape[0]
-        self.conv1 = ChebTimeConv(f1, g1, K=k1)
-
-        n1 = L[0].shape[0]
-        d = 10
-        self.fc1 = torch.nn.Linear(n1 * g1, d)
-
-    def forward(self, x):
-        x, edge_index = x, self.coos[0].to(x.device)
-        x = self.conv1(x, edge_index)
-        x = F.relu(x)
-
-        x = x.view(x.shape[0], -1)
-        x = self.fc1(x)
-
-        return F.log_softmax(x, dim=1)
-
-
 class NetTGCN(torch.nn.Module):
     def __init__(self, graphs, coos):
         super(NetTGCN, self).__init__()
 
-        f1, g1, k1 = 1, 32, 25 #graphs[0].shape[0]
-        self.conv1 = ChebTimeConv(f1, g1, K=k1)
+        f1, g1, k1, h1 = 1, 32, 25, 12
+        #f1, g1, k1 = 1, 32, 25
+        self.conv1 = ChebTimeConv(f1, g1, K=k1, H=h1)
 
         f2, g2, k2 = 32, 64, 25
-        self.conv2 = ChebTimeConv(f2, g2, K=k2)
+        self.conv2 = ChebConv(f2, g2, K=k2)
 
         n2 = graphs[2].shape[0]
         #self.fc1 = torch.nn.Linear(n1 * g1, 10)
@@ -239,6 +342,7 @@ class NetTGCN(torch.nn.Module):
         self.coos = coos
 
     def forward(self, x):
+        x = torch.tensor(npa.real(npa.fft.fft(x.to('cpu').numpy(), axis=2))).to('cuda')
         x, edge_index = x, self.coos[0].to(x.device)
         x = self.conv1(x, edge_index)
         x = F.relu(x)
@@ -256,12 +360,49 @@ class NetTGCN(torch.nn.Module):
         return F.log_softmax(x, dim=1)
 
 
-def get_mnist_data_gcn(perm):
+def perm_data_time(x, indices):
+    """
+    Permute data matrix, i.e. exchange node ids,
+    so that binary unions form the clustering tree.
+    """
+    if indices is None:
+        return x
+
+    N, M, Q = x.shape
+    Mnew = len(indices)
+    assert Mnew >= M
+    xnew = np.empty((N, Mnew, Q))
+    for i,j in enumerate(indices):
+        # Existing vertex, i.e. real data.
+        if j < M:
+            xnew[:, i, :] = x[:, j, :]
+        # Fake vertex because of singeltons.
+        # They will stay 0 so that max pooling chooses the singelton.
+        # Or -infty ?
+        else:
+            xnew[:, i, :] = np.zeros((N, Q))
+    return xnew
+
+
+def get_mnist_data_tgcn(perm):
 
     N, train_data, train_labels, test_data, test_labels = load_mnist()
 
-    train_data = coarsening.perm_data(train_data, perm)
-    test_data = coarsening.perm_data(test_data, perm)
+    H = 12
+
+    train_data = np.transpose(np.tile(train_data, (H, 1, 1)), axes=[1, 2, 0])
+    test_data = np.transpose(np.tile(test_data, (H, 1, 1)), axes=[1, 2, 0])
+
+    #idx_train = range(30*512)
+    #idx_test = range(10*512)
+
+    #train_data = train_data[idx_train]
+    #train_labels = train_labels[idx_train]
+    #test_data = test_data[idx_test]
+    #test_labels = test_labels[idx_test]
+
+    train_data = perm_data_time(train_data, perm)
+    test_data = perm_data_time(test_data, perm)
 
     del perm
 
@@ -392,7 +533,7 @@ def experiment(args):
     graphs, perm = create_graph(device)
     coos = [torch.tensor([graph.tocoo().row, graph.tocoo().col], dtype=torch.long).to(device) for graph in graphs]
 
-    train_images, test_images, train_labels, test_labels = get_mnist_data_gcn(perm)
+    train_images, test_images, train_labels, test_labels = get_mnist_data_tgcn(perm)
 
     training_set = Dataset(train_images, train_labels)
     train_loader = torch.utils.data.DataLoader(training_set, batch_size=args.batch_size)
