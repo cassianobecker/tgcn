@@ -60,12 +60,18 @@ def spmm_batch(index, value, m, matrix):
     matrix = matrix if matrix.dim() > 1 else matrix.unsqueeze(-1)
 
     out = matrix[:, col]
-    sh = out.shape[2]
+    try:
+        sh = out.shape[2]
+    except:
+        out = out.unsqueeze(-1)
+        sh = 1
 
-    out = out.permute(1, 2, 0)
-    out = torch.mul(out, value.repeat(-1, sh))
-    out = out.permute(1, 2, 0)
-    out = scatter_add(out, row, dim=1, dim_size=m).unsqueeze(-1)
+    #out = out.permute(1, 2, 0)
+    #out = torch.mul(out, value.repeat(-1, sh))
+    #out = out.permute(1, 2, 0)
+    temp = value.expand(sh, value.shape[0]).permute(1, 0)
+    out = torch.einsum("abc,bc->abc", out, temp)
+    out = scatter_add(out, row, dim=1, dim_size=m)
 
     return out
 
@@ -151,13 +157,13 @@ class ChebConv(torch.nn.Module):
         out = torch.matmul(Tx_0, self.weight[0])
 
         if K > 1:
-            #Tx_1 = spmm_batch(edge_index, lap, num_nodes, x)
-            Tx_1 = torch.stack([spmm(edge_index, lap, num_nodes, Tx_0[i]) for i in range(x.shape[0])])
+            Tx_1 = spmm_batch(edge_index, lap, num_nodes, x)
+            #Tx_1 = torch.stack([spmm(edge_index, lap, num_nodes, Tx_0[i]) for i in range(x.shape[0])])
             out = out + torch.matmul(Tx_1, self.weight[1])
 
         for k in range(2, K):
-
-            temp = torch.stack([spmm(edge_index, lap, num_nodes, Tx_1[i]) for i in range(x.shape[0])])
+            temp = spmm_batch(edge_index, lap, num_nodes, Tx_1)
+            #temp = torch.stack([spmm(edge_index, lap, num_nodes, Tx_1[i]) for i in range(x.shape[0])])
             Tx_2 = 2 * temp - Tx_0
             out = out + torch.matmul(Tx_2, self.weight[k])
             Tx_0, Tx_1 = Tx_1, Tx_2
@@ -178,6 +184,36 @@ def uniform(size, tensor):
     stdv = 1.0 / math.sqrt(size)
     if tensor is not None:
         tensor.data.uniform_(-stdv, stdv)
+
+
+class NetGCNBasic(torch.nn.Module):
+
+    def __init__(self, L):
+
+        # f: number of input filters
+        # g: number of output filters
+        # k: order of chebyshev polynomial
+        # c: number of classes
+        # n: number of vertices at coarsening level
+        super(NetGCNBasic, self).__init__()
+
+        f1, g1, k1 = 1, 32, 25  # graphs[0].shape[0]
+        self.conv1 = ChebConv(f1, g1, K=k1)
+
+        n1 = L[0].shape[0]
+        d = 10
+        self.fc1 = torch.nn.Linear(n1 * g1, d)
+
+    def forward(self, x):
+        x, edge_index = x, self.coos[0].to(x.device)
+        x = self.conv1(x, edge_index)
+        x = F.relu(x)
+
+        x = x.view(x.shape[0], -1)
+        x = self.fc1(x)
+
+        return F.log_softmax(x, dim=1)
+
 
 class Net(torch.nn.Module):
     def __init__(self, graphs, coos):
@@ -203,12 +239,12 @@ class Net(torch.nn.Module):
         self.coos = coos
 
     def forward(self, x):
-        x, edge_index = x, self.coos[0]
+        x, edge_index = x, self.coos[0].to(x.device)
         x = self.conv1(x, edge_index)
         x = F.relu(x)
         x = gcn_pool_4(x)
 
-        edge_index = self.coos[2]
+        edge_index = self.coos[2].to(x.device)
         x = self.conv2(x, edge_index)
         x = F.relu(x)
         x = gcn_pool_4(x)
@@ -349,8 +385,8 @@ def experiment(args):
     # torch.manual_seed(args.seed)
     use_cuda = not args.no_cuda and torch.cuda.is_available()
 
-    #device = torch.device("cuda" if use_cuda else "cpu")
-    device = torch.device("cpu")
+    device = torch.device("cuda" if use_cuda else "cpu")
+    #device = torch.device("cpu")
     # kwargs = {'num_workers': 1, 'pin_memory': True} if use_cuda else {}
 
     graphs, perm = create_graph(device)
@@ -372,6 +408,7 @@ def experiment(args):
         model = torch.nn.DataParallel(model)
 
     model.to(device)
+    #model.cuda()
 
 
     pytorch_total_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
