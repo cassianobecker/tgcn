@@ -267,12 +267,23 @@ def get_mnist_data_gcn(perm):
 
     return train_data, test_data, train_labels, test_labels
 
-def create_graph(device):
+
+def create_graph(device, shuffled=False):
     def grid_graph(m, corners=False):
         z = graph.grid(m)
         dist, idx = graph.distance_sklearn_metrics(z, k=number_edges, metric=metric)
         A = graph.adjacency(dist, idx)
-        #A = sp.random(A.shape[0], A.shape[0], density=0.01, format="csr", data_rvs=lambda s: np.random.uniform(0, 0.5, size=s))
+
+        if shuffled:
+            B = A.toarray()
+            B = list(B[np.triu_indices(A.shape[0])])
+            random.shuffle(B)
+            A = np.zeros((A.shape[0], A.shape[0]))
+            indices = np.triu_indices(A.shape[0])
+            A[indices] = B
+            A = A + A.T - np.diag(A.diagonal())
+            A = sp.csr_matrix(A)
+
         # Connections are only vertical or horizontal on the grid.
         # Corner vertices are connected to 2 neightbors only.
         if corners:
