@@ -324,6 +324,8 @@ class NetTGCN(torch.nn.Module):
         #f1, g1, k1 = 1, 32, 25
         self.conv1 = ChebTimeConv(f1, g1, K=k1, H=h1)
 
+        self.drop1 = nn.Dropout(0.1)
+
         g2, k2 = 96, 10
         self.conv2 = ChebConv(g1, g2, K=k2)
 
@@ -331,9 +333,10 @@ class NetTGCN(torch.nn.Module):
         #self.fc1 = torch.nn.Linear(n1 * g1, 10)
 
         d = 512
-        self.fc1 = torch.nn.Linear(int(n2 * g2 / 4), d)
+        self.fc1 = torch.nn.Linear(int(n2 * g2), d)
 
-        # self.drop = nn.Dropout(0)
+        self.dense1_bn = nn.BatchNorm1d(d)
+        self.drop2 = nn.Dropout(0.5)
 
         c = 6
         self.fc2 = torch.nn.Linear(d, c)
@@ -347,14 +350,20 @@ class NetTGCN(torch.nn.Module):
         x = F.relu(x)
         x = gcn_pool_4(x)
 
+        x = self.drop1(x)
+
         edge_index = self.coos[2].to(x.device)
         x = self.conv2(x, edge_index)
         x = F.relu(x)
-        x = gcn_pool_4(x)
+        #x = gcn_pool_4(x)
 
         x = x.view(x.shape[0], -1)
         x = self.fc1(x)
+
+        x = self.dense1_bn(x)
         x = F.relu(x)
+        x = self.drop2(x)
+
         x = self.fc2(x)
         return F.log_softmax(x, dim=1)
 
@@ -430,21 +439,7 @@ def load_hcp_tcgn(device):
     coarsening_levels = 4
 
     graphs, perm = coarsening.coarsen(As[0], levels=coarsening_levels, self_connections=False)
-    L = [torch.tensor(graph.rescale_L(graph.laplacian(A, normalized=normalized_laplacian).todense(), lmax=2),
-                      dtype=torch.float).to(device) for A in graphs]
-
-    L_sparse = list()
-    for A in graphs:
-        g = graph.rescale_L(graph.laplacian(A, normalized=normalized_laplacian), lmax=2)
-        coo = coo_matrix(g)
-        values = coo.data
-        indices = np.vstack((coo.row, coo.col))
-        i = torch.LongTensor(indices)
-        v = torch.FloatTensor(values)
-        shape = coo.shape
-        a = torch.sparse.FloatTensor(i, v, torch.Size(shape))
-        a = a.to(device)
-        L_sparse.append(a)
+    coos = [torch.tensor([graph.tocoo().row, graph.tocoo().col], dtype=torch.long).to(device) for graph in graphs]
 
     idx_train = range(int(0.8*time_series.shape[0]))
     print('Size of train set: {}'.format(len(idx_train)))
@@ -460,12 +455,7 @@ def load_hcp_tcgn(device):
     train_data = perm_data_time(train_data, perm)
     test_data = perm_data_time(test_data, perm)
 
-    sparse = False
-    if sparse:
-        laplacian = L_sparse
-    else :
-        laplacian = L
-    return laplacian, train_data, test_data, train_labels, test_labels
+    return graphs, coos, train_data, test_data, train_labels, test_labels
 
 
 def train(args, model, device, train_loader, optimizer, epoch):
@@ -576,12 +566,11 @@ def main():
     normalized_laplacian = True
     coarsening_levels = 4
 
-    graphs, perm = coarsening.coarsen(As[0], levels=coarsening_levels, self_connections=False)
-    coos = [torch.tensor([graph.tocoo().row, graph.tocoo().col], dtype=torch.long).to(device) for graph in graphs]
+
 
     # kwargs = {'num_workers': 1, 'pin_memory': True} if use_cuda else {}
 
-    L, train_images, test_images, train_labels, test_labels = load_hcp_tcgn(device)
+    graphs, coos, train_images, test_images, train_labels, test_labels = load_hcp_tcgn(device)
 
     training_set = Dataset(train_images, train_labels)
     train_loader = torch.utils.data.DataLoader(training_set, batch_size=args.batch_size, shuffle=False)

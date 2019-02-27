@@ -2,7 +2,7 @@ from __future__ import print_function
 import argparse
 import torch
 import torch.nn as nn
-from tgcn.nn.gcn import TGCNCheb, TGCNCheb_H, GCNCheb, gcn_pool
+from tgcn.nn.gcn import TGCNCheb, TGCNCheb_H, GCNCheb, gcn_pool, gcn_pool_4
 import torch.nn.functional as F
 import torch.optim as optim
 from torchvision import datasets, transforms
@@ -107,7 +107,7 @@ class NetTGCN(nn.Module):
 
         g2, k2 = 96, 10
         # self.tgcn2 = TGCNCheb_H(L[0], g1, g2, k2, h1)
-        self.gcn2 = GCNCheb(L[0], g1, g2, k2)
+        self.gcn2 = GCNCheb(L[2], g1, g2, k2)
 
         self.dense1_bn = nn.BatchNorm1d(50)
         # n1 = L[0].shape[0]
@@ -115,7 +115,7 @@ class NetTGCN(nn.Module):
         # c = 6
         # self.fc1 = nn.Linear(n1 * g1, c)
 
-        n2 = L[0].shape[0]
+        n2 = L[2].shape[0]
         d = 200
         self.fc1 = nn.Linear(n2 * g2, d)
 
@@ -132,7 +132,7 @@ class NetTGCN(nn.Module):
         x = self.tgcn1(x)
         x = F.relu(x)
         x = self.drop1(x)
-        #x = gcn_pool(x)
+        x = gcn_pool_4(x)
         x = self.gcn2(x)
         x = F.relu(x)
         # x = self.dense1_bn(x)
@@ -145,41 +145,6 @@ class NetTGCN(nn.Module):
         x = self.fc2(x)
 
         return F.log_softmax(x, dim=1)
-
-
-# def create_graph():
-#     def grid_graph(m, corners=False):
-#         z = graph.grid(m)
-#         dist, idx = graph.distance_sklearn_metrics(z, k=number_edges, metric=metric)
-#         A = graph.adjacency(dist, idx)
-#
-#         # Connections are only vertical or horizontal on the grid.
-#         # Corner vertices are connected to 2 neightbors only.
-#         if corners:
-#             import scipy.sparse
-#             A = A.toarray()
-#             A[A < A.max() / 1.5] = 0
-#             A = scipy.sparse.csr_matrix(A)
-#             print('{} edges'.format(A.nnz))
-#
-#         print("{} > {} edges".format(A.nnz // 2, number_edges * m ** 2 // 2))
-#         return A
-#
-#     number_edges = 8
-#     metric = 'euclidean'
-#     normalized_laplacian = True
-#     coarsening_levels = 4
-#
-#     A = grid_graph(28, corners=False)
-#     # A = graph.replace_random_edges(A, 0)
-#     graphs, perm = coarsening.coarsen(A, levels=coarsening_levels, self_connections=False)
-#     # L = [graph.laplacian(A, normalized=normalized_laplacian) for A in graphs]
-#     L = [torch.tensor(graph.rescale_L(graph.laplacian(A, normalized=normalized_laplacian).todense(), lmax=2),
-#                       dtype=torch.float).to(device) for A in graphs]
-#     # graph.plot_spectrum(L)
-#     del A
-#
-#     return L, perm
 
 
 def train(args, model, device, train_loader, optimizer, epoch):
