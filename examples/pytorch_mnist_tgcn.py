@@ -1,4 +1,6 @@
 from __future__ import print_function
+import sys
+sys.path.insert(0, '..')
 import argparse
 import torch
 import torch.nn as nn
@@ -257,7 +259,11 @@ def main():
         test(args, model, device, test_loader)
 
     if args.save_model:
-        torch.save(model.state_dict(), "mnist_cnn.pt")
+        graph_fp = "mnist_tgcn_laplacian.torch"
+        model_fp = "mnist_tgcn.pt"
+        torch.save(L, graph_fp)
+        torch.save(model.state_dict(), model_fp)
+        print("Saved Laplacian to {0} and model to {1}".format(graph_fp, model_fp))
 
 
 if __name__ == '__main__':

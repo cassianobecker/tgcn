@@ -1,4 +1,7 @@
 from __future__ import print_function
+import sys
+sys.path.insert(0, '..')
+
 import argparse
 import torch
 import torch.nn as nn
@@ -58,7 +61,7 @@ def load_hcp_tcgn(device):
         coo = coo_matrix(g)
         values = coo.data
         indices = np.vstack((coo.row, coo.col))
-        i = torch.LongTensor(indices)
+        i = torch.LongTensor(indices.astype('long'))
         v = torch.FloatTensor(values)
         shape = coo.shape
         a = torch.sparse.FloatTensor(i, v, torch.Size(shape))
@@ -92,14 +95,14 @@ def load_hcp_tcgn(device):
 
 class NetTGCN(nn.Module):
 
-    def __init__(self, L):
+    def __init__(self, L, device='cuda'):
         super(NetTGCN, self).__init__()
         # f: number of input filters
         # g: number of output layers
         # k: order of chebyshev polynomials
         # c: number of classes
         # n: number of vertices at coarsening level
-
+        self.device = device
         f1, g1, k1, h1 = 1, 96, 10, 15
         self.tgcn1 = TGCNCheb_H(L[0], f1, g1, k1, h1)
 
@@ -128,7 +131,7 @@ class NetTGCN(nn.Module):
 
     def forward(self, x):
         #x = torch.tensor(npa.real(npa.fft.fft(x.to('cpu').numpy(), axis=2))).to('cuda')
-        x = torch.rfft(x, signal_ndim=1, onesided=False)[:, :, :, 0].to('cuda')
+        x = torch.rfft(x, signal_ndim=1, onesided=False)[:, :, :, 0].to(self.device)
         x = self.tgcn1(x)
         x = F.relu(x)
         x = self.drop1(x)
@@ -307,7 +310,7 @@ def main():
     #
     #     m_tensor = torch.sparse.FloatTensor(i, v, torch.Size(shape)).to_dense()
     #     L_tensor.append(m_tensor)
-    model = NetTGCN(L).to(device)
+    model = NetTGCN(L, device=device).to(device)
 
     optimizer = optim.SGD(model.parameters(), lr=args.lr, momentum=args.momentum)
 
@@ -317,7 +320,12 @@ def main():
         test(args, model, device, test_loader, t1)
 
     if args.save_model:
-        torch.save(model.state_dict(), "mnist_cnn.pt")
+        graph_fp = "hcp_tgcn_laplacian.torch"
+        model_fp = "hcp_tgcn.pt"
+        torch.save(L, graph_fp)
+        torch.save(model.state_dict(), model_fp)
+        print("Saved Laplacian to {0} and model to {1}".format(graph_fp, model_fp))
+        
 
 
 if __name__ == '__main__':

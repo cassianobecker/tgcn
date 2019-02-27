@@ -146,12 +146,12 @@ class TGCNCheb_H(torch.nn.Module):
 
         # Xt_1 = T_1 X = L X.
         if self.filter_order > 1:
-            X = torch.einsum("nm,qmhf->qnhf", self.L, X)
+            X = torch.einsum("nm,qmhf->qnhf", self.L, X.float())
             Xt[1, ...] = X
         # Xt_k = 2 L Xt_k-1 - Xt_k-2.
         for k in range(2, self.filter_order):
             #X = Xt[k - 1, ...]
-            X = torch.einsum("nm,qmhf->qnhf", self.L, X)
+            X = torch.einsum("nm,qmhf->qnhf", self.L, X.float())
             Xt[k, ...] = 2 * X - Xt[k - 2, ...]
         return Xt
 
