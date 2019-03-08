@@ -1,6 +1,7 @@
 from __future__ import print_function
 import sys
 sys.path.insert(0, '..')
+sys.path.insert(0, '../..')
 import argparse
 import torch
 import torch.nn as nn
@@ -260,10 +261,12 @@ def main():
 
     if args.save_model:
         graph_fp = "mnist_tgcn_laplacian.torch"
+        perm_fp = "mnist_tgcn_perm.torch"
         model_fp = "mnist_tgcn.pt"
         torch.save(L, graph_fp)
+        torch.save(perm, perm_fp)
         torch.save(model.state_dict(), model_fp)
-        print("Saved Laplacian to {0} and model to {1}".format(graph_fp, model_fp))
+        print("Saved Laplacian to {0}, node permutation to {1}, and model to {2}".format(graph_fp, perm_fp, model_fp))
 
 
 if __name__ == '__main__':

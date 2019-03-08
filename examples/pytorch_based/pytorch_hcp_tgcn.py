@@ -45,8 +45,7 @@ def perm_data_time(x, indices):
     return xnew
 
 
-def load_hcp_tcgn(device):
-
+def load_hcp_tcgn(device, save_perm=False):
     time_series, labels, As = load_hcp_example()
 
     normalized_laplacian = True
@@ -82,6 +81,11 @@ def load_hcp_tcgn(device):
     train_labels = labels[idx_train]
     test_data = time_series[idx_test]
     test_labels = labels[idx_test]
+
+    if save_perm:
+        perm_fp = 'hcp_tgcn_perm.torch'
+        torch.save(perm, perm_fp)
+        print('Saving Node Permutation to {0}'.format(perm_fp))
 
     train_data = perm_data_time(train_data, perm)
     test_data = perm_data_time(test_data, perm)
@@ -255,7 +259,7 @@ def main():
 
     # kwargs = {'num_workers': 1, 'pin_memory': True} if use_cuda else {}
 
-    L, train_images, test_images, train_labels, test_labels = load_hcp_tcgn(device)
+    L, train_images, test_images, train_labels, test_labels = load_hcp_tcgn(device, save_perm=args.save_model)
 
     training_set = Dataset(train_images, train_labels)
     train_loader = torch.utils.data.DataLoader(training_set, batch_size=args.batch_size, shuffle=False)
