@@ -5,7 +5,7 @@ sys.path.insert(0, '../..')
 
 import torch
 from saliency import gradient_ascent, unpermute
-from pytorch_hcp_tgcn import NetTGCN
+from pytorch_based.pytorch_hcp_tgcn import NetTGCN
 
 
 class NetTGCN_Saliency(NetTGCN):
