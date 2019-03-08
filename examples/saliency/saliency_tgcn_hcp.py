@@ -15,19 +15,18 @@ class NetTGCN_Saliency(NetTGCN):
         x = torch.rfft(x, signal_ndim=1, onesided=False)[:, :, :, 0].to(self.device)
         x = self.tgcn1(x)
         x = F.relu(x)
-
         x = self.drop1(x)
+        x = gcn_pool_4(x)
         x = self.gcn2(x)
         x = F.relu(x)
-
         x = x.view(x.shape[0], -1)
         x = self.fc1(x)
         x = self.dense1_bn(x)
         x = F.relu(x)
-
         x = self.drop2(x)
         x = self.fc2(x)
         return x
+       
 
 def load_hcp_tgcn_saliency_model(model_state, L, device='cuda'):
     model = NetTGCN_Saliency(L)
