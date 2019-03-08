@@ -6,6 +6,7 @@ sys.path.insert(0, '../..')
 import torch
 from saliency import gradient_ascent, unpermute
 from pytorch_based.pytorch_hcp_tgcn import NetTGCN
+from tgcn.nn.gcn import gcn_pool_4
 import torch.nn.functional as F
 
 
