@@ -51,7 +51,7 @@ def main():
     print("model loaded")
     input_shape = (1, 160, 15)
     n_real_nodes = 148
-    target_dir = hcp_saliency_results
+    target_dir = "hcp_saliency_results"
     for target in range(6):
         x_hat = gradient_ascent(model, input_shape=input_shape, target=target)
         x_hat_real = unpermute(x_hat, perm, n_real_nodes)
