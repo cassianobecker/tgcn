@@ -27,3 +27,12 @@ def gradient_ascent(model, init=None, input_shape=(1, 1, 28, 28), target=0, ep=.
             print(f'Target: {target}\t{i}/{max_iter} iterations updated')
     print(f'Target: {target}\tReached max_iter')
     return x
+
+def unpermute(x, perm, n_real_nodes):
+    x = x.clone().detach().cpu()
+    output_shape = (x.shape[0], n_real_nodes, x.shape[2])
+    x_real = np.zeros((output_shape))
+    for x_idx, x_real_idx in enumerate(perm):
+        if x_real_idx < n_real_nodes:
+            x_real[:, x_real_idx, :] = x[:, x_idx, :]
+    return x_real

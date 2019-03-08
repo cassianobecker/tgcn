@@ -3,7 +3,7 @@ import sys
 sys.path.insert(0, '..')
 
 import torch
-from pytorch_mnist_tgcn import NetTGCN
+from pytorch_based.pytorch_mnist_tgcn import NetTGCN
 import autograd.numpy as npa
 import torch.nn.functional as F
 
