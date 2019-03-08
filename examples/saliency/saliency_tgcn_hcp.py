@@ -48,8 +48,16 @@ def load_saved_state():
 def main():
     model_state, L, perm = load_saved_state()
     model = load_hcp_tgcn_saliency_model(model_state, L)
-    return model
-
+    print("model loaded")
+    input_shape = (1, 160, 15)
+    n_real_nodes = 148
+    target_dir = hcp_saliency_results
+    for target in range(6):
+        x_hat = gradient_ascent(model, input_shape=input_shape, target=target)
+        x_hat_real = unpermute(x_hat, perm, n_real_nodes)
+        output = x_hat_real.reshape(148, 15)
+        np.save(output, f"{target_dir}/hcp_saliency_target_{target}")
+        print(f"Target: {target} saved to - {target_dir}/hcp_saliency_target_{target}")
 
 
 if __name__ == "__main__":
