@@ -100,14 +100,16 @@ class NetTGCN(nn.Module):
         # c: number of classes
         # n: number of vertices at coarsening level
 
-        f1, g1, k1, h1 = 1, 96, 10, 15
+        f1, g1, k1, h1 = 1, 32, 10, 15
         self.tgcn1 = TGCNCheb_H(L[0], f1, g1, k1, h1)
 
         self.drop1 = nn.Dropout(0.1)
 
-        g2, k2 = 96, 10
-        # self.tgcn2 = TGCNCheb_H(L[0], g1, g2, k2, h1)
+        g2, k2 = 64, 10
         self.gcn2 = GCNCheb(L[2], g1, g2, k2)
+
+        #g3, k3 = 32, 10
+        #self.gcn3 = GCNCheb(L[4], g2, g3, k3)
 
         self.dense1_bn = nn.BatchNorm1d(50)
         # n1 = L[0].shape[0]
@@ -116,14 +118,14 @@ class NetTGCN(nn.Module):
         # self.fc1 = nn.Linear(n1 * g1, c)
 
         n2 = L[2].shape[0]
-        d = 200
-        self.fc1 = nn.Linear(n2 * g2, d)
+        c = 200
+        self.fc1 = nn.Linear(n2 * g2, c)
 
-        self.dense1_bn = nn.BatchNorm1d(d)
+        self.dense1_bn = nn.BatchNorm1d(c)
         self.drop2 = nn.Dropout(0.5)
 
-        c = 6
-        self.fc2 = nn.Linear(d, c)
+        d = 6
+        self.fc2 = nn.Linear(c, d)
 
 
     def forward(self, x):
@@ -133,12 +135,18 @@ class NetTGCN(nn.Module):
         x = F.relu(x)
         x = self.drop1(x)
         x = gcn_pool_4(x)
+
         x = self.gcn2(x)
         x = F.relu(x)
+        x = gcn_pool_4(x)
+
+        #x = self.gcn3(x)
+        #x = F.relu(x)
+
         # x = self.dense1_bn(x)
         x = x.view(x.shape[0], -1)
         x = self.fc1(x)
-        # x = F.relu(x)
+
         x = self.dense1_bn(x)
         x = F.relu(x)
         x = self.drop2(x)
@@ -227,7 +235,7 @@ def main():
                         help='input batch size for training (default: 64)')
     parser.add_argument('--test-batch-size', type=int, default=1000, metavar='N',
                         help='input batch size for testing (default: 1000)')
-    parser.add_argument('--epochs', type=int, default=20, metavar='N',
+    parser.add_argument('--epochs', type=int, default=100, metavar='N',
                         help='number of epochs to train (default: 10)')
     parser.add_argument('--lr', type=float, default=0.01, metavar='LR',
                         help='learning rate (default: 0.01)')
@@ -264,20 +272,20 @@ def main():
         model = torch.nn.DataParallel(model)
     model.to(device)
 
-    try:
-        model.load_state_dict(torch.load("hcp_cnn_1gpu2.pt"))
-        model.to(device)
-        model.eval()
-        test(args, model, device, test_loader, 0)
-    except:
-        optimizer = optim.SGD(model.parameters(), lr=args.lr, momentum=args.momentum)
-        for epoch in range(1, args.epochs + 1):
-            t1 = time.time()
-            train(args, model, device, train_loader, optimizer, epoch)
-            test(args, model, device, test_loader, t1)
+    # try:
+    #     model.load_state_dict(torch.load("hcp_cnn_1gpu2.pt"))
+    #     model.to(device)
+    #     model.eval()
+    #     test(args, model, device, test_loader, 0)
+    # except:
+    optimizer = optim.SGD(model.parameters(), lr=args.lr, momentum=args.momentum)
+    for epoch in range(1, args.epochs + 1):
+        t1 = time.time()
+        train(args, model, device, train_loader, optimizer, epoch)
+        test(args, model, device, test_loader, t1)
 
-        if args.save_model:
-            torch.save(model.state_dict(), "hcp_cnn_1gpu2.pt")
+    if args.save_model:
+        torch.save(model.state_dict(), "hcp_cnn_1gpu2.pt")
 
 
 if __name__ == '__main__':
