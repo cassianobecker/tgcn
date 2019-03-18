@@ -27,7 +27,7 @@ class NetTGCN(torch.nn.Module):
     def __init__(self, graphs, coos):
         super(NetTGCN, self).__init__()
 
-        f1, g1, k1, h1 = 1, 32, 25, 12
+        f1, g1, k1, h1 = 1, 32, 25, 30
         #f1, g1, k1 = 1, 32, 25
         self.conv1 = ChebTimeConv(f1, g1, K=k1, H=h1)
 
@@ -122,6 +122,9 @@ def get_mnist_data_tgcn(perm):
     train_data = np.transpose(np.tile(train_data, (H, 1, 1)), axes=[1, 2, 0])
     test_data = np.transpose(np.tile(test_data, (H, 1, 1)), axes=[1, 2, 0])
 
+    #train_data = np.random.rand(train_data.shape[0], len(perm) * len(perm), train_data.shape[2])
+    #test_data = np.random.rand(test_data.shape[0], len(perm) * len(perm), test_data.shape[2])
+
     #idx_train = range(30*512)
     #idx_test = range(10*512)
 
@@ -137,12 +140,45 @@ def get_mnist_data_tgcn(perm):
 
     return train_data, test_data, train_labels, test_labels
 
+
+def get_fake_data_tgcn(perm):
+    M = 9000
+    T = 10
+    H = 30
+    l = len(perm)
+
+    train_data = np.random.rand(M, l, H)
+    test_data = np.random.rand(T, l, H)
+
+    train_data = perm_data_time(train_data, perm)
+    test_data = perm_data_time(test_data, perm)
+
+    train_labels = np.random.randint(0, 5, M)
+    test_labels = np.random.randint(0, 5, T)
+
+    one_hot = lambda x, k: np.array(x[:, None] == np.arange(k)[None, :], dtype=int)
+
+    train_labels = one_hot(train_labels, 10)
+    test_labels = one_hot(test_labels, 10)
+
+    del perm
+
+    return train_data, test_data, train_labels, test_labels
+
+
 def create_graph(device):
+    div = 25
+    N = int(65e3 / div)
+    M = 10
+    H = 30
+    E = 500000 / div
+    d = E / N ** 2  # 0.01
+
     def grid_graph(m, corners=False):
         z = graph.grid(m)
         dist, idx = graph.distance_sklearn_metrics(z, k=number_edges, metric=metric)
         A = graph.adjacency(dist, idx)
-        #A = sp.random(A.shape[0], A.shape[0], density=0.01, format="csr", data_rvs=lambda s: np.random.uniform(0, 0.5, size=s))
+        A = sp.random(A.shape[0], A.shape[0], density=d, format="csr", data_rvs=lambda s: np.random.uniform(0, 0.5, size=s))
         # Connections are only vertical or horizontal on the grid.
         # Corner vertices are connected to 2 neightbors only.
         if corners:
@@ -160,7 +196,8 @@ def create_graph(device):
     normalized_laplacian = True
     coarsening_levels = 4
 
-    A = grid_graph(28, corners=False)
+    #N = 28
+    A = grid_graph(int(math.sqrt(N)), corners=False)
     #A = graph.replace_random_edges(A, 0)
     graphs, perm = coarsening.coarsen(A, levels=coarsening_levels, self_connections=False)
     return graphs, perm
@@ -262,7 +299,7 @@ def experiment(args):
     graphs, perm = create_graph(device)
     coos = [torch.tensor([graph.tocoo().row, graph.tocoo().col], dtype=torch.long).to(device) for graph in graphs]
 
-    train_images, test_images, train_labels, test_labels = get_mnist_data_tgcn(perm)
+    train_images, test_images, train_labels, test_labels = get_fake_data_tgcn(perm)
 
     training_set = Dataset(train_images, train_labels)
     train_loader = torch.utils.data.DataLoader(training_set, batch_size=args.batch_size)

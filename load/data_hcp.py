@@ -4,6 +4,8 @@ import os
 from util.path import get_root
 import scipy.sparse
 from os.path import expanduser
+from sklearn.metrics import confusion_matrix, classification_report
+
 
 def get_cues(MOTOR):
     C = MOTOR['ev_idx'][0, 0]
@@ -172,13 +174,18 @@ def load_strucutural(subjects, file_url):
     return S
 
 
-def load_hcp_example():
+def load_hcp_example(full=False):
 
     list_file = 'subjects_inter.txt'
     list_url = os.path.join(get_root(), 'conf', list_file)
     subjects_strut = load_subjects(list_url)
 
+
     list_file = 'subjects_all.txt'
+
+    if full:
+        list_file = 'subjects_hcp_all.txt'
+
     list_url = os.path.join(get_root(), 'conf', list_file)
     subjects = load_subjects(list_url)
 
@@ -188,8 +195,14 @@ def load_hcp_example():
 
     # data_path = '/Users/cassiano/Dropbox/cob/work/upenn/research/projects/tefemerid/code/v1/tfsid/out/data/hcp/many_motor'
     # data_path = '~/data_hcp/'
+
     data_path = os.path.join(expanduser("~"), 'data_hcp')
     post_fix = '_aparc_tasks.mat'
+
+    if full:
+        data_path = os.path.join(expanduser("~"), 'data_full/aparc')
+        post_fix = '_aparc_tasks_aparc.mat'
+
     p = 148
     T = 284
     C, X, _ = get_dataset(subjects, data_path, post_fix, session='MOTOR_LR', p=p, T=T)
@@ -213,6 +226,148 @@ def load_hcp_example():
     yoh = one_hot(y, k+1)
 
     return Xw, yoh, S
+
+
+def get_lookback_data(X, y, lookback=5):
+    X_lb = np.zeros(shape=(X.shape[0] - lookback, lookback + 1, X.shape[1]))
+    y_lb = np.zeros(shape=(X_lb.shape[0], y.shape[1]))
+
+    for t in range(lookback + 2, X.shape[0]):
+        X_lb[t - lookback - 2, :, :] = X[t - lookback - 2 : t - 1, :]
+        y_lb[t - lookback - 2, :] = y[t - 1, :]
+    return X_lb, y_lb
+
+
+def decode(y_hat, length=6, offset=2):
+    T = len(y_hat)
+    y_decoded = [0] * T
+    i = 0
+
+    while (i < T - 5):
+        a = (int(y_hat[i] == y_hat[i + 1] != 0))
+        b = (int(y_hat[i] == y_hat[i + 2] != 0))
+        c = (int(y_hat[i] == y_hat[i + 3] != 0))
+        d = (int(y_hat[i] == y_hat[i + 4] != 0))
+        e = (int(y_hat[i] == y_hat[i + 5] != 0))
+        num_agree = (a + b + c + d + e)
+
+        if (num_agree > 1):
+            y_decoded[i - offset] = y_hat[i]
+            i += length
+        else:
+            i += 1
+    return np.array(y_decoded)
+
+
+def assess_performance(c_actual, c_predicted, delta=3, include_rest=True):
+    predictions = []
+    N = c_actual.shape[0]
+
+    cue_locations = np.where(c_actual != 0)[0]
+
+    for cue_loc in cue_locations:
+        chunk_actual = c_actual[cue_loc - delta: cue_loc + delta]
+        chunk_predicted = c_predicted[cue_loc - delta: cue_loc + delta]
+
+        locations_nz = np.where(chunk_predicted != 0)[0]
+        for location_nz in locations_nz:
+            actual, predicted = c_actual[cue_loc], chunk_predicted[location_nz]
+            predictions.append((actual, predicted, cue_loc, cue_loc + location_nz - delta))
+
+        if not isinstance(locations_nz, np.ndarray):
+            predictions.append((c_actual[cue_loc], 0, 0, 0))
+
+    rest_locations = np.pad(cue_locations, (1, 1), 'constant', constant_values=[-delta, N])
+    for i in range(rest_locations.shape[0] - 1):
+        begin = rest_locations[i] + delta
+        end = rest_locations[i + 1] - delta
+
+        chunk_predicted = c_predicted[begin: end]
+        loc_nz = np.where(chunk_predicted != 0)[0]
+
+        for i in loc_nz:
+            predictions.append((0, chunk_predicted[i], 0, i + begin))
+
+    if include_rest:
+        num_left_over = N - len(predictions)
+        for _ in range(num_left_over):
+            predictions.append((0, 0, 0, 0))
+
+    return np.asarray(predictions, dtype=int)
+
+
+def gen_results(y_true_decoded, y_pred_decoded):
+    # generate results
+    y_actual_2 = []
+    y_predicted_2 = []
+
+    results = assess_performance(y_true_decoded, y_pred_decoded)
+    for tup in results:
+        y_actual_2.append(tup[0])
+        y_predicted_2.append(tup[1])
+
+    print(classification_report(y_true=y_actual_2, y_pred=y_predicted_2))
+    print(confusion_matrix(y_true=y_actual_2, y_pred=y_predicted_2))
+
+
+def extend_signal(X, length=6, offset=2):
+    X_temp = np.zeros_like(X)
+    for i in range(length):
+        X_temp = X_temp + np.pad(X[:-i-1-offset, :], pad_width=((i+1+offset, 0), (0, 0)), mode='constant')
+    return X_temp
+
+
+def load_hcp_vote(lookback=10):
+
+    list_file = 'subjects_inter.txt'
+    list_url = os.path.join(get_root(), 'conf', list_file)
+    subjects_strut = load_subjects(list_url)
+
+    list_file = 'subjects_hcp_all.txt'
+    #list_file = 'subjects_all.txt'
+    list_url = os.path.join(get_root(), 'conf', list_file)
+    subjects = load_subjects(list_url)
+
+    structural_file = 'struct_dti.mat'
+    structural_url = os.path.join(get_root(), 'load', 'hcpdata', structural_file)
+    S = load_strucutural(subjects_strut, structural_url)
+
+    # data_path = '/Users/cassiano/Dropbox/cob/work/upenn/research/projects/tefemerid/code/v1/tfsid/out/data/hcp/many_motor'
+    # data_path = '~/data_hcp/'
+
+    data_path = os.path.join(expanduser("~"), 'data_full/aparc')
+    post_fix = '_aparc_tasks_aparc.mat'
+
+    #data_path = os.path.join(expanduser("~"), 'data_hcp')
+    #post_fix = '_aparc_tasks.mat'
+
+    p = 148
+    T = 284
+    C, X, _ = get_dataset(subjects, data_path, post_fix, session='MOTOR_LR', p=p, T=T)
+    sh = C.shape
+
+    C, X = np.swapaxes(C, 1, 2), np.swapaxes(X, 1, 2)
+    C = C.reshape((C.shape[0] * C.shape[1], C.shape[2]))
+    X = X.reshape((X.shape[0] * X.shape[1], X.shape[2]))
+    assert (C.shape[0] == X.shape[0])
+
+    C = extend_signal(C)
+    # NONE is 1 - any(motor_task)
+    C[:, 0] = 1 - np.sum(C[:, 1:6], axis=1)
+
+    N_TRAIN = int(0.75 * X.shape[0])
+
+    X_train_1 = X[0:N_TRAIN, :]
+    labels_train_1 = C[0:N_TRAIN, :]
+
+    X_test_1 = X[N_TRAIN:, :]
+    labels_test_1 = C[N_TRAIN:, :]
+
+    X_train, y_train = get_lookback_data(X_train_1, labels_train_1, lookback=lookback)
+    X_test, y_test = get_lookback_data(X_test_1, labels_test_1, lookback=lookback)
+    X_train, X_test = np.swapaxes(X_train, 1, 2), np.swapaxes(X_test, 1, 2)
+
+    return X_train, y_train, X_test, y_test, S
 
 
 if __name__ == '__main__':
