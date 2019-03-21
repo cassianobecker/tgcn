@@ -218,7 +218,7 @@ def create_graph(device, shuffled=False):
 
 def load_hcp_tcgn(device):
 
-    X_train, y_train, X_test, y_test, As = vote.load_hcp_vote()
+    time_series, labels, As = load_hcp_example()
 
     normalized_laplacian = True
     coarsening_levels = 4
@@ -226,16 +226,34 @@ def load_hcp_tcgn(device):
     graphs, perm = coarsening.coarsen(As[0], levels=coarsening_levels, self_connections=False)
     coos = [torch.tensor([graph.tocoo().row, graph.tocoo().col], dtype=torch.long).to(device) for graph in graphs]
 
-    train_data = perm_data_time(X_train, perm)
-    test_data = perm_data_time(X_test, perm)
+    idx_train = range(int(0.8*time_series.shape[0]))
+    print('Size of train set: {}'.format(len(idx_train)))
 
-    return graphs, coos, train_data, test_data, y_train, y_test
+    idx_test = range(len(idx_train), time_series.shape[0])
+    print('Size of test set: {}'.format(len(idx_test)))
+
+    itrain2 = range(int(0.4*time_series.shape[0]))
+    itest2 = range(len(itrain2), int(0.5*time_series.shape[0]))
+
+    train_data = time_series[idx_train]
+    train_labels = labels[idx_train]
+    test_data = time_series[idx_test]
+    test_labels = labels[idx_test]
+
+    # train_data = time_series[itrain2]
+    # train_labels = labels[itrain2]
+    # test_data = time_series[itest2]
+    # test_labels = labels[itest2]
+
+    train_data = perm_data_time(train_data, perm)
+    test_data = perm_data_time(test_data, perm)
+
+    return graphs, coos, train_data, test_data, train_labels, test_labels
 
 
 def train(args, model, device, train_loader, optimizer, epoch, verbose=False):
     model.train()
     for batch_idx, (data, target) in enumerate(train_loader):
-
         data, target = data.to(device), target.to(device)
         optimizer.zero_grad()
         output = model(data)
@@ -259,11 +277,8 @@ def test(args, model, device, test_loader, t1, epoch):
     model.eval()
     test_loss = 0
     correct = 0
-    c = 0
     preds = torch.empty(0, dtype=torch.long).to(device)
     targets = torch.empty(0, dtype=torch.long).to(device)
-    ps = []
-    rs = []
     with torch.no_grad():
         for data_t, target_t in test_loader:
             data = data_t.to(device)
@@ -277,11 +292,6 @@ def test(args, model, device, test_loader, t1, epoch):
             targets = torch.cat((target, targets))
             correct += pred.eq(target.view_as(pred)).sum().item()
 
-            p = vote.decode(pred.cpu().numpy(), length=6, offset=2)
-            r = vote.decode(target.cpu().numpy(), length=6, offset=2)
-            ps = np.append(ps, p)
-            rs = np.append(rs, r)
-
     test_loss /= len(test_loader.dataset)
 
     print('\nTest Epoch: {} Average loss: {:.4f}, Accuracy: {}/{} ({:.2f}%)'.format(
@@ -290,11 +300,6 @@ def test(args, model, device, test_loader, t1, epoch):
     t2 = time.time()
     #print(t2-t1)
     #print(sklearn.metrics.classification_report(targets.to('cpu').numpy(), preds.to('cpu').numpy()))
-    ps = np.array(ps).flatten()
-    rs = np.array(rs).flatten()
-    # c = np.equal(rs, ps).sum().item()
-    vote.gen_results(ps, rs)
-    # print(100. * c / len(ps))
 
 
 class Dataset(torch.utils.data.Dataset):
@@ -326,6 +331,38 @@ def seed_everything(seed=1234):
     np.random.seed(seed)
     os.environ['PYTHONHASHSEED'] = str(seed)
     torch.backends.cudnn.deterministic = True
+
+
+def decode(y_hat, H, Gp, Gn):
+    T = len(y_hat)
+    N = T + H - 1
+    y_decoded = [0] * N
+    i = 0
+
+    while (i < T - 3):
+        num_agree = ((int(y_hat[i] == y_hat[i + 1] != 0)) +
+                     (int(y_hat[i] == y_hat[i + 2] != 0)) +
+                     (int(y_hat[i] == y_hat[i + 3] != 0)))
+        if (num_agree > 1):
+            y_decoded[i + Gn] = y_hat[i]
+            i += H
+        else:
+            i += 1
+    return np.array(y_decoded)
+
+
+def holdout_delabeled(model, data):
+    H = 12
+    y_holdout = model(data)
+    y_holdout = np.reshape(y_holdout, (20, 284 - H + 1))
+
+    num_patients = y_holdout.shape[0]
+    y_decoded = np.zeros((num_patients, 284))
+    Gp, Gn = 4, 4
+    for i in range(y_holdout.shape[0]):
+        y_decoded[i, :] = decode(y_holdout[i, :], H, Gp, Gn)
+
+    return y_decoded
 
 
 def main():
@@ -375,8 +412,8 @@ def main():
     validation_set = Dataset(test_images, test_labels)
     test_loader = torch.utils.data.DataLoader(validation_set, batch_size=args.batch_size, shuffle=False)
 
-    #model = NetTGCNBasic(graphs, coos)
-    model = NetMLP(int(graphs[0].shape[0] * 11))
+    model = NetTGCNBasic(graphs, coos)
+    #model = NetMLP(int(graphs[0].shape[0] * 15))
 
     if torch.cuda.device_count() > 1:
         model = torch.nn.DataParallel(model)

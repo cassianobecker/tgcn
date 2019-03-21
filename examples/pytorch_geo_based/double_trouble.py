@@ -432,8 +432,8 @@ def main():
         pytorch_total_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
         print(pytorch_total_params)
 
-        optimizer = optim.SGD(model.parameters(), lr=args.lr, momentum=args.momentum)
-        #optimizer = optim.Adam(model.parameters(), lr=args.lr)
+        #optimizer = optim.SGD(model.parameters(), lr=args.lr, momentum=args.momentum)
+        optimizer = optim.Adam(model.parameters(), lr=args.lr)
         scheduler = torch.optim.lr_scheduler.ExponentialLR(optimizer, gamma=0.95)
         for epoch in range(1, args.epochs + 1):
             t1 = time.time()

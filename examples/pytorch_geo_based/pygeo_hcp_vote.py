@@ -11,6 +11,7 @@ import autograd.numpy as npa
 from load.data_hcp import load_hcp_example
 import gcn.graph as graph
 import gcn.coarsening as coarsening
+import load.data_hcp as vote
 import sklearn.metrics
 import time, math, random, os
 import scipy.sparse as sp
@@ -62,19 +63,69 @@ class NetTGCN(torch.nn.Module):
 
         #self.drop1 = nn.Dropout(0.1)
 
+        g2, k2 = 64, 25
+        self.conv2 = ChebConv(g1, g2, K=k2)
+
+        n2 = graphs[0].shape[0]
+
+        c = 512
+        self.fc1 = torch.nn.Linear(int(n2 * g2), c)
+
+        #self.dense1_bn = nn.BatchNorm1d(d)
+        #self.drop2 = nn.Dropout(0.5)
+
+        d = 6
+        self.fc2 = torch.nn.Linear(c, d)
+
+        self.coos = coos
+
+    def forward(self, x):
+        x = torch.tensor(npa.real(npa.fft.fft(x.to('cpu').numpy(), axis=2))).to('cuda')
+        x, edge_index = x, self.coos[0].to(x.device)
+        x = self.conv1(x, edge_index)
+        x = F.relu(x)
+        #x = gcn_pool_4(x)
+
+        #x = self.drop1(x)
+
+        edge_index = self.coos[0].to(x.device)
+        x = self.conv2(x, edge_index)
+        x = F.relu(x)
+        #x = gcn_pool_4(x)
+
+        x = x.view(x.shape[0], -1)
+        x = self.fc1(x)
+
+        #x = self.dense1_bn(x)
+        #x = F.relu(x)
+        #x = self.drop2(x)
+
+        x = self.fc2(x)
+        return F.log_softmax(x, dim=1)
+
+
+class NetTGCNBasic(torch.nn.Module):
+    def __init__(self, graphs, coos):
+        super(NetTGCNBasic, self).__init__()
+
+        f1, g1, k1, h1 = 1, 64, 25, 11
+        self.conv1 = ChebTimeConv(f1, g1, K=k1, H=h1)
+
+        #self.drop1 = nn.Dropout(0.1)
+
         #g2, k2 = 64, 10
         #self.conv2 = ChebConv(g1, g2, K=k2)
 
         n2 = graphs[0].shape[0]
 
-        c = 6
+        c = 512
         self.fc1 = torch.nn.Linear(int(n2 * g1), c)
 
         #self.dense1_bn = nn.BatchNorm1d(d)
         #self.drop2 = nn.Dropout(0.5)
 
-        #d = 6
-        #self.fc2 = torch.nn.Linear(c, d)
+        d = 6
+        self.fc2 = torch.nn.Linear(c, d)
 
         self.coos = coos
 
@@ -90,7 +141,6 @@ class NetTGCN(torch.nn.Module):
         #edge_index = self.coos[0].to(x.device)
         #x = self.conv2(x, edge_index)
         #x = F.relu(x)
-        #x = gcn_pool_4(x)
 
         x = x.view(x.shape[0], -1)
         x = self.fc1(x)
@@ -99,7 +149,7 @@ class NetTGCN(torch.nn.Module):
         #x = F.relu(x)
         #x = self.drop2(x)
 
-        #x = self.fc2(x)
+        x = self.fc2(x)
         return F.log_softmax(x, dim=1)
 
 
@@ -322,8 +372,8 @@ def main():
     validation_set = Dataset(test_images, test_labels)
     test_loader = torch.utils.data.DataLoader(validation_set, batch_size=args.batch_size, shuffle=False)
 
-    #model = NetTGCN(graphs, coos)
-    model = NetMLP(int(graphs[0].shape[0] * 15))
+    model = NetTGCN(graphs, coos)
+    #model = NetMLP(int(graphs[0].shape[0] * 15))
 
     if torch.cuda.device_count() > 1:
         model = torch.nn.DataParallel(model)
