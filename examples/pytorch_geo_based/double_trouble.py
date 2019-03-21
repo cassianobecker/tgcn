@@ -62,7 +62,7 @@ class NetTGCN(torch.nn.Module):
 
         #self.drop1 = nn.Dropout(0.1)
 
-        g2, k2 = 64, 10
+        g2, k2 = 64, 25
         self.conv2 = ChebConv(g1, g2, K=k2)
 
         n2 = graphs[0].shape[0]
@@ -91,6 +91,55 @@ class NetTGCN(torch.nn.Module):
         x = self.conv2(x, edge_index)
         x = F.relu(x)
         #x = gcn_pool_4(x)
+
+        x = x.view(x.shape[0], -1)
+        x = self.fc1(x)
+
+        #x = self.dense1_bn(x)
+        #x = F.relu(x)
+        #x = self.drop2(x)
+
+        x = self.fc2(x)
+        return F.log_softmax(x, dim=1)
+
+
+class NetTGCNBasic(torch.nn.Module):
+    def __init__(self, graphs, coos):
+        super(NetTGCNBasic, self).__init__()
+
+        f1, g1, k1, h1 = 1, 32, 25, 15
+        self.conv1 = ChebTimeConv(f1, g1, K=k1, H=h1)
+
+        #self.drop1 = nn.Dropout(0.1)
+
+        #g2, k2 = 64, 10
+        #self.conv2 = ChebConv(g1, g2, K=k2)
+
+        n2 = graphs[0].shape[0]
+
+        c = 512
+        self.fc1 = torch.nn.Linear(int(n2 * g1), c)
+
+        #self.dense1_bn = nn.BatchNorm1d(d)
+        #self.drop2 = nn.Dropout(0.5)
+
+        d = 6
+        self.fc2 = torch.nn.Linear(c, d)
+
+        self.coos = coos
+
+    def forward(self, x):
+        x = torch.tensor(npa.real(npa.fft.fft(x.to('cpu').numpy(), axis=2))).to('cuda')
+        x, edge_index = x, self.coos[0].to(x.device)
+        x = self.conv1(x, edge_index)
+        x = F.relu(x)
+        #x = gcn_pool_4(x)
+
+        #x = self.drop1(x)
+
+        #edge_index = self.coos[0].to(x.device)
+        #x = self.conv2(x, edge_index)
+        #x = F.relu(x)
 
         x = x.view(x.shape[0], -1)
         x = self.fc1(x)
@@ -182,10 +231,18 @@ def load_hcp_tcgn(device):
     idx_test = range(len(idx_train), time_series.shape[0])
     print('Size of test set: {}'.format(len(idx_test)))
 
+    itrain2 = range(int(0.4*time_series.shape[0]))
+    itest2 = range(len(itrain2), int(0.5*time_series.shape[0]))
+
     train_data = time_series[idx_train]
     train_labels = labels[idx_train]
     test_data = time_series[idx_test]
     test_labels = labels[idx_test]
+
+    # train_data = time_series[itrain2]
+    # train_labels = labels[itrain2]
+    # test_data = time_series[itest2]
+    # test_labels = labels[itest2]
 
     train_data = perm_data_time(train_data, perm)
     test_data = perm_data_time(test_data, perm)
@@ -193,7 +250,7 @@ def load_hcp_tcgn(device):
     return graphs, coos, train_data, test_data, train_labels, test_labels
 
 
-def train(args, model, device, train_loader, optimizer, epoch):
+def train(args, model, device, train_loader, optimizer, epoch, verbose=False):
     model.train()
     for batch_idx, (data, target) in enumerate(train_loader):
         data, target = data.to(device), target.to(device)
@@ -208,10 +265,11 @@ def train(args, model, device, train_loader, optimizer, epoch):
                 loss = loss + args.reg_weight*(p[1]**2).sum()
         loss.backward()
         optimizer.step()
-        if batch_idx % args.log_interval == 0:
-            print('Train Epoch: {} [{}/{} ({:.0f}%)]\tLoss: {:.6f}'.format(
-                epoch, batch_idx * len(data), len(train_loader.dataset),
-                       100. * batch_idx / len(train_loader), loss.item()))
+        if verbose:
+            if batch_idx % args.log_interval == 0:
+                print('Train Epoch: {} [{}/{} ({:.0f}%)]\tLoss: {:.6f}'.format(
+                    epoch, batch_idx * len(data), len(train_loader.dataset),
+                           100. * batch_idx / len(train_loader), loss.item()))
 
 
 def test(args, model, device, test_loader, t1, epoch):
@@ -225,6 +283,7 @@ def test(args, model, device, test_loader, t1, epoch):
             data = data_t.to(device)
             target = target_t.to(device)
             output = model(data)
+            #output = holdout_delabeled(model, data)
             target = torch.argmax(target, dim=1)
             test_loss += F.nll_loss(output, target, reduction='sum').item()  # sum up batch loss
             pred = output.max(1, keepdim=True)[1]  # get the index of the max log-probability
@@ -241,7 +300,7 @@ def test(args, model, device, test_loader, t1, epoch):
     #print(t2-t1)
     #print(sklearn.metrics.classification_report(targets.to('cpu').numpy(), preds.to('cpu').numpy()))
 
-torch.utils
+
 class Dataset(torch.utils.data.Dataset):
   'Characterizes a dataset for PyTorch'
   def __init__(self, images, labels):
@@ -273,6 +332,38 @@ def seed_everything(seed=1234):
     torch.backends.cudnn.deterministic = True
 
 
+def decode(y_hat, H, Gp, Gn):
+    T = len(y_hat)
+    N = T + H - 1
+    y_decoded = [0] * N
+    i = 0
+
+    while (i < T - 3):
+        num_agree = ((int(y_hat[i] == y_hat[i + 1] != 0)) +
+                     (int(y_hat[i] == y_hat[i + 2] != 0)) +
+                     (int(y_hat[i] == y_hat[i + 3] != 0)))
+        if (num_agree > 1):
+            y_decoded[i + Gn] = y_hat[i]
+            i += H
+        else:
+            i += 1
+    return np.array(y_decoded)
+
+
+def holdout_delabeled(model, data):
+    H = 12
+    y_holdout = model(data)
+    y_holdout = np.reshape(y_holdout, (20, 284 - H + 1))
+
+    num_patients = y_holdout.shape[0]
+    y_decoded = np.zeros((num_patients, 284))
+    Gp, Gn = 4, 4
+    for i in range(y_holdout.shape[0]):
+        y_decoded[i, :] = decode(y_holdout[i, :], H, Gp, Gn)
+
+    return y_decoded
+
+
 def main():
     # Training settings
     parser = argparse.ArgumentParser(description='PyTorch MNIST Example')
@@ -282,7 +373,7 @@ def main():
                         help='input batch size for testing (default: 1000)')
     parser.add_argument('--epochs', type=int, default=50, metavar='N',
                         help='number of epochs to train (default: 10)')
-    parser.add_argument('--lr', type=float, default=0.001, metavar='LR',
+    parser.add_argument('--lr', type=float, default=0.02, metavar='LR',
                         help='learning rate (default: 0.01)')
     parser.add_argument('--momentum', type=float, default=0.5, metavar='M',
                         help='SGD momentum (default: 0.5)')
@@ -305,8 +396,6 @@ def main():
     device = torch.device("cuda" if use_cuda else "cpu")
     #device = torch.device("cpu")
 
-    time_series, labels, As = load_hcp_example()
-
     normalized_laplacian = True
     coarsening_levels = 4
 
@@ -322,27 +411,35 @@ def main():
     validation_set = Dataset(test_images, test_labels)
     test_loader = torch.utils.data.DataLoader(validation_set, batch_size=args.batch_size, shuffle=False)
 
-    model = NetTGCN(graphs, coos)
-    #model = NetMLP(int(graphs[0].shape[0] * 15))
+    tgcn_2layer = NetTGCN(graphs, coos)
+    tgcn_1layer = NetTGCNBasic(graphs, coos)
+    mlp = NetMLP(int(graphs[0].shape[0] * 15))
 
-    if torch.cuda.device_count() > 1:
-        model = torch.nn.DataParallel(model)
-    model.to(device)
+    models = [mlp, tgcn_1layer, tgcn_2layer]
+    names = ["mlp", "tgcn_1layer", "tgcn_2layer"]
 
-    pytorch_total_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
-    print(pytorch_total_params)
+    for i in range(3):
+        model = models[i]
+        name = names[i]
 
-    #optimizer = optim.SGD(model.parameters(), lr=args.lr, momentum=args.momentum)
-    optimizer = optim.Adam(model.parameters(), lr=args.lr)
-    scheduler = torch.optim.lr_scheduler.ExponentialLR(optimizer, gamma=0.95)
-    for epoch in range(1, args.epochs + 1):
-        t1 = time.time()
-        train(args, model, device, train_loader, optimizer, epoch)
-        scheduler.step()
-        test(args, model, device, test_loader, t1, epoch)
+        print("START NEW MODEL\n")
+        print(name)
 
-    if args.save_model:
-        torch.save(model.state_dict(), "hcp_cnn_1gpu2.pt")
+        if torch.cuda.device_count() > 1:
+            model = torch.nn.DataParallel(model)
+        model.to(device)
+
+        pytorch_total_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+        print(pytorch_total_params)
+
+        optimizer = optim.SGD(model.parameters(), lr=args.lr, momentum=args.momentum)
+        #optimizer = optim.Adam(model.parameters(), lr=args.lr)
+        scheduler = torch.optim.lr_scheduler.ExponentialLR(optimizer, gamma=0.95)
+        for epoch in range(1, args.epochs + 1):
+            t1 = time.time()
+            train(args, model, device, train_loader, optimizer, epoch)
+            scheduler.step()
+            test(args, model, device, test_loader, t1, epoch)
 
 
 if __name__ == '__main__':
