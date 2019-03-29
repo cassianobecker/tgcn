@@ -1,4 +1,7 @@
 from __future__ import print_function
+import sys
+sys.path.insert(0, '..')
+sys.path.insert(0, '../..')
 import argparse
 import torch
 import torch.nn as nn
@@ -425,7 +428,7 @@ def experiment(args):
     #     m_tensor = torch.sparse.FloatTensor(i, v, torch.Size(shape)).to_dense()
     #     L_tensor.append(m_tensor)
 
-    model = NetGCNBasic(L)
+    model = NetGCN3(L)
     if torch.cuda.device_count() > 1:
         model = torch.nn.DataParallel(model)
 
@@ -448,7 +451,13 @@ def experiment(args):
         test(args, model, device, test_loader, epoch)
 
     if args.save_model:
-        torch.save(model.state_dict(), "mnist_cnn.pt")
+        graph_fp = "mnist_gcn_laplacian.torch"
+        perm_fp = "mnist_gcn_perm.torch"
+        model_fp = "mnist_gcn.pt"
+        torch.save(L, graph_fp)
+        torch.save(perm, perm_fp)
+        torch.save(model.state_dict(), model_fp)
+        print("Saved Laplacian to {0}, node permutation to {1}, and model to {2}".format(graph_fp, perm_fp, model_fp))
 
 
 

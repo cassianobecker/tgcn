@@ -39,7 +39,7 @@ def load_hcp_tgcn_saliency_model(model_state, L, device='cuda'):
 def load_saved_state():
     model_fp = "saved_models/hcp_tgcn.pt"
     graph_fp = "saved_models/hcp_tgcn_laplacian.torch"
-    perm_fp = "saved_models/hcp_tgcn_laplacian.torch"
+    perm_fp = "saved_models/hcp_tgcn_perm.torch"
     model_state = torch.load(model_fp)
     L = torch.load(graph_fp)
     perm = torch.load(perm_fp)
@@ -57,7 +57,7 @@ def main():
         x_hat = gradient_ascent(model, input_shape=input_shape, target=target)
         x_hat_real = unpermute(x_hat, perm, n_real_nodes)
         output = x_hat_real.reshape(148, 15)
-        np.save(output, f"{target_dir}/hcp_saliency_target_{target}")
+        np.save(f"{target_dir}/hcp_saliency_target_{target}", output)
         print(f"Target: {target} saved to - {target_dir}/hcp_saliency_target_{target}")
 
 

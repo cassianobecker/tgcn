@@ -1,7 +1,7 @@
 import torch
 import numpy as np
 
-def gradient_ascent(model, init=None, input_shape=(1, 1, 28, 28), target=0, ep=.01, max_iter=10000, device='cuda'):
+def gradient_ascent(model, init=None, input_shape=(1, 1, 28, 28), target=0, ep=.01, max_iter=10000, reg_penalty=.01, device='cuda'):
     """
     Performs gradient ascent on a model with given class probabilities and target classification
     If S_c(x) is the class scores for class c, then S_c(x) = model.class_scores(x)[0][target]
@@ -15,7 +15,7 @@ def gradient_ascent(model, init=None, input_shape=(1, 1, 28, 28), target=0, ep=.
         # Class probability for target given input x
         output = model.class_probabilities(x)[0][target]
         # regularization term
-        output -= .01 * torch.norm(x)
+        output -= reg_penalty * torch.norm(x)
         # calculate gradient
         output.backward()
         # take step in direction of gradient
