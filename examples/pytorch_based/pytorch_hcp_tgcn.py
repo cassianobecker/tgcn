@@ -119,7 +119,7 @@ class NetTGCN(nn.Module):
 
         n2 = L[2].shape[0]
         c = 200
-        self.fc1 = nn.Linear(n2 * g2, c)
+        self.fc1 = nn.Linear(int(n2 * g2 / 4), c)
 
         self.dense1_bn = nn.BatchNorm1d(c)
         self.drop2 = nn.Dropout(0.5)
@@ -167,10 +167,10 @@ def train(args, model, device, train_loader, optimizer, epoch):
         loss = F.nll_loss(output, target, weight=w)
         loss.backward()
         optimizer.step()
-        if batch_idx % args.log_interval == 0:
-            print('Train Epoch: {} [{}/{} ({:.0f}%)]\tLoss: {:.6f}'.format(
-                epoch, batch_idx * len(data), len(train_loader.dataset),
-                       100. * batch_idx / len(train_loader), loss.item()))
+        # if batch_idx % args.log_interval == 0:
+        #     print('Train Epoch: {} [{}/{} ({:.0f}%)]\tLoss: {:.6f}'.format(
+        #         epoch, batch_idx * len(data), len(train_loader.dataset),
+        #                100. * batch_idx / len(train_loader), loss.item()))
 
 
 def test(args, model, device, test_loader, t1):
@@ -237,7 +237,7 @@ def main():
                         help='input batch size for testing (default: 1000)')
     parser.add_argument('--epochs', type=int, default=100, metavar='N',
                         help='number of epochs to train (default: 10)')
-    parser.add_argument('--lr', type=float, default=0.01, metavar='LR',
+    parser.add_argument('--lr', type=float, default=0.02, metavar='LR',
                         help='learning rate (default: 0.01)')
     parser.add_argument('--momentum', type=float, default=0.5, metavar='M',
                         help='SGD momentum (default: 0.5)')

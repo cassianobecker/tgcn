@@ -108,7 +108,7 @@ class NetTGCNBasic(torch.nn.Module):
     def __init__(self, graphs, coos):
         super(NetTGCNBasic, self).__init__()
 
-        f1, g1, k1, h1 = 1, 64, 25, 11
+        f1, g1, k1, h1 = 1, 64, 25, 15
         self.conv1 = ChebTimeConv(f1, g1, K=k1, H=h1)
 
         #self.drop1 = nn.Dropout(0.1)
@@ -118,19 +118,19 @@ class NetTGCNBasic(torch.nn.Module):
 
         n2 = graphs[0].shape[0]
 
-        c = 512
+        c = 6
         self.fc1 = torch.nn.Linear(int(n2 * g1), c)
 
         #self.dense1_bn = nn.BatchNorm1d(d)
         #self.drop2 = nn.Dropout(0.5)
 
-        d = 6
-        self.fc2 = torch.nn.Linear(c, d)
+        #d = 6
+        #self.fc2 = torch.nn.Linear(c, d)
 
         self.coos = coos
 
     def forward(self, x):
-        x = torch.tensor(npa.real(npa.fft.fft(x.to('cpu').numpy(), axis=2))).to('cuda')
+        #x = torch.tensor(npa.real(npa.fft.fft(x.to('cpu').numpy(), axis=2))).to('cuda')
         x, edge_index = x, self.coos[0].to(x.device)
         x = self.conv1(x, edge_index)
         x = F.relu(x)
@@ -149,7 +149,7 @@ class NetTGCNBasic(torch.nn.Module):
         #x = F.relu(x)
         #x = self.drop2(x)
 
-        x = self.fc2(x)
+        #x = self.fc2(x)
         return F.log_softmax(x, dim=1)
 
 
@@ -288,10 +288,10 @@ def test(args, model, device, test_loader, t1, epoch):
         epoch, test_loss, correct, len(test_loader.dataset),
         100. * correct / len(test_loader.dataset)))
     t2 = time.time()
-    #print(t2-t1)
-    #print(sklearn.metrics.classification_report(targets.to('cpu').numpy(), preds.to('cpu').numpy()))
+    print(t2-t1)
+    print(sklearn.metrics.classification_report(targets.to('cpu').numpy(), preds.to('cpu').numpy()))
 
-torch.utils
+
 class Dataset(torch.utils.data.Dataset):
   'Characterizes a dataset for PyTorch'
   def __init__(self, images, labels):
@@ -326,7 +326,7 @@ def seed_everything(seed=1234):
 def main():
     # Training settings
     parser = argparse.ArgumentParser(description='PyTorch MNIST Example')
-    parser.add_argument('--batch-size', type=int, default=100, metavar='N',
+    parser.add_argument('--batch-size', type=int, default=1, metavar='N',
                         help='input batch size for training (default: 64)')
     parser.add_argument('--test-batch-size', type=int, default=1000, metavar='N',
                         help='input batch size for testing (default: 1000)')
@@ -353,14 +353,6 @@ def main():
     torch.manual_seed(args.seed)
 
     device = torch.device("cuda" if use_cuda else "cpu")
-    #device = torch.device("cpu")
-
-    time_series, labels, As = load_hcp_example()
-
-    normalized_laplacian = True
-    coarsening_levels = 4
-
-
 
     # kwargs = {'num_workers': 1, 'pin_memory': True} if use_cuda else {}
 
@@ -372,7 +364,7 @@ def main():
     validation_set = Dataset(test_images, test_labels)
     test_loader = torch.utils.data.DataLoader(validation_set, batch_size=args.batch_size, shuffle=False)
 
-    model = NetTGCN(graphs, coos)
+    model = NetTGCNBasic(graphs, coos)
     #model = NetMLP(int(graphs[0].shape[0] * 15))
 
     if torch.cuda.device_count() > 1:
@@ -397,6 +389,4 @@ def main():
 
 if __name__ == '__main__':
     main()
-
-
 

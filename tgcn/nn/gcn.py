@@ -515,8 +515,8 @@ class ChebTimeConv(torch.nn.Module):
         else:
             Tx_0 = x
         #out = torch.matmul(Tx_0, self.weight[0])
-        out = torch.einsum("qnhf,hfg->qng", Tx_0, self.weight[0])
 
+        out = torch.einsum("qnhf,hfg->qng", Tx_0, self.weight[0])
         if K > 1:
             Tx_1 = spmm_batch_3(edge_index, lap, num_nodes, Tx_0)
             out = out + torch.einsum("qnhf,hfg->qng", Tx_1, self.weight[1])
