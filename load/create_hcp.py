@@ -38,6 +38,8 @@ def process_all(base_dir, parc, subjects, tasks, db_url):
 
         data[subject] = task_list
 
+        data['adj'] = get_adj(subject, base_dir)
+
     return data
 
 
@@ -157,33 +159,35 @@ def get_row_cols(faces):
     return rows, cols
 
 
-def get_adj_hemi(hemi, inflation, subject, task, base_dir):
+def get_adj_hemi(hemi, inflation, subject, base_dir, offset):
 
     fname = subject + '.' + hemi + '.' + inflation + '.32k_fs_LR.surf.gii'
     furl = os.path.join(base_dir, subject, 'MNINonLinear', 'fsaverage_LR32k', fname)
 
     img = nib.load(furl)
     coords = img.darrays[0].data
-    faces = img.darrays[1].data.astype(int)
+    faces = img.darrays[1].data.astype(int) + offset
     rows, cols = get_row_cols(faces)
-    data = np.ones(len(rows))
-    
-    A = scipy.sparse.coo_matrix((data, (rows, cols)))
-    
-    return A, coords
+
+    return rows, cols, coords
 
 
-def test_get_adj(subject, task, base_dir):
+def get_adj(subject, base_dir):
 
     inflation = 'white'
 
     hemi = 'L'
-    A, coords = get_adj_hemi(hemi, inflation, subject, task, base_dir)
-    A.sum()
+    rows_L, cols_L, coords_L = get_adj_hemi(hemi, inflation, subject, base_dir, offset=0)
 
     hemi = 'R'
-    A, coords = get_adj_hemi(hemi, inflation, subject, task, base_dir)
-    A.sum()
+    offset = len(coords_L)
+    rows_R, cols_R, coords_R = get_adj_hemi(hemi, inflation, subject, base_dir, offset=offset)
+
+    data = np.ones(len(rows_L) + len(rows_R))
+    A = scipy.sparse.coo_matrix((data, (rows_L+rows_R, cols_L+cols_R)))
+    coords = np.vstack((coords_L, coords_R))
+
+    return A, coords
 
 
 def save():
