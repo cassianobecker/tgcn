@@ -7,6 +7,7 @@ from os.path import expanduser
 from sklearn.metrics import confusion_matrix, classification_report
 import torch
 import gcn.coarsening as coarsening
+from load.create_hcp import process_subject, load_strucutural, load_subjects
 from sys import getsizeof
 
 
@@ -82,15 +83,6 @@ def get_delabeled_dataset(filedir, session, p=148, T=284):
     return [C, None, X]
 
 
-def load_subjects(list_url):
-
-    with open(list_url, 'r') as f:
-        subjects = [s.strip() for s in f.readlines()]
-
-    return subjects
-
-
-
 def get_dataset(subjects, data_path, post_fix, session, p=32492, T=284):
 
     # with open(list_url, 'r') as f:
@@ -160,21 +152,6 @@ def encode(C, X, H, Gp, Gn):
     X_windowed = np.reshape(X_windowed, (num_examples, p, H))
 
     return [X_windowed.astype("float32"), y]
-
-
-def load_strucutural(subjects, file_url):
-
-    strut = sio.loadmat(file_url).get('strut')
-    strut_subs = [strut[0][0][2][i][0][0] for i in range(len(strut[0][0][2]))]
-
-    S = list()
-
-    for subject in subjects:
-        idx_subj = strut_subs.index(subject)
-        Si = strut[0][0][1][idx_subj][0]
-        S.append(scipy.sparse.csr_matrix(Si))
-
-    return S
 
 
 def load_hcp_example(full=False):
@@ -354,7 +331,6 @@ class EncodePerm(object):
 
 
 class StreamDataset(torch.utils.data.Dataset):
-    """Face Landmarks dataset."""
 
     def __init__(self):
         normalized_laplacian = True
@@ -411,7 +387,6 @@ class StreamDataset(torch.utils.data.Dataset):
 
 
 class TestDataset(torch.utils.data.Dataset):
-    """Face Landmarks dataset."""
 
     def __init__(self, perm):
 
@@ -443,6 +418,66 @@ class TestDataset(torch.utils.data.Dataset):
         Xw, yoh = self.transform(C_i, X_i)
 
         return Xw.astype('float32'), yoh
+
+
+class FullDataset(torch.utils.data.Dataset):
+
+    def __init__(self):
+        normalized_laplacian = True
+        coarsening_levels = 4
+
+        list_file = 'subjects_inter.txt'
+        list_url = os.path.join(get_root(), 'conf', list_file)
+        subjects_strut = load_subjects(list_url)
+
+        structural_file = 'struct_dti.mat'
+        structural_url = os.path.join(get_root(), 'load', 'hcpdata', structural_file)
+        S = load_strucutural(subjects_strut, structural_url)
+        S = S[0]
+
+        self.graphs, self.perm = coarsening.coarsen(S, levels=coarsening_levels, self_connections=False)
+
+        #############
+
+        self.list_file = 'subjects.txt'
+        list_url = os.path.join(get_root(), 'conf/hcp/train/motor_lr', self.list_file)
+
+        self.data_path = os.path.join(expanduser("~"), 'data_dense')
+        #self.data_path = os.path.join(get_root(), 'load/hcpdense')
+
+        self.subjects = load_subjects(list_url)
+
+        self.p = 148
+        self.T = 284
+        self.session = 'MOTOR_LR'
+
+        self.transform = EncodePerm(15, 4, 4, self.perm)
+
+    def get_graphs(self, device):
+        coos = [torch.tensor([graph.tocoo().row, graph.tocoo().col], dtype=torch.long).to(device) for graph in self.graphs]
+        return self.graphs, coos, self.perm
+
+    def __len__(self):
+        return len(self.subjects)
+
+    def __getitem__(self, idx):
+        file = os.path.join(self.data_path, self.subjects[idx])
+
+        subject = self.subjects[idx]
+
+        data = process_subject(self.data_path, 'aparc', subject, [self.session], None)
+
+        ds = sio.loadmat(file).get('ds')
+        MOTOR = ds[0, 0][self.session]
+
+        C_i = np.expand_dims(get_cues(MOTOR), 0)
+        X_i = np.expand_dims(get_bold(MOTOR).transpose(), 0)
+
+        #X_i = np.random.rand(1, 65000, 284)
+
+        Xw, yoh = self.transform(C_i, X_i)
+
+        return Xw, yoh
 
 
 def get_lookback_data(X, y, lookback=5):

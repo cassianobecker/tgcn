@@ -8,10 +8,9 @@ import torch.nn.functional as F
 import torch.optim as optim
 import numpy as np
 import autograd.numpy as npa
-from load.data_hcp import load_hcp_example, StreamDataset, TestDataset
+from load.data_hcp import load_hcp_example, StreamDataset, TestDataset, FullDataset
 import gcn.graph as graph
 import gcn.coarsening as coarsening
-import load.data_hcp as vote
 import sklearn.metrics
 import time, math, random, os
 import scipy.sparse as sp
@@ -440,6 +439,11 @@ def main():
 
 
     # kwargs = {'num_workers': 1, 'pin_memory': True} if use_cuda else {}
+
+    # lalaland = FullDataset()
+    # loader = torch.utils.data.DataLoader(lalaland, batch_size=args.batch_size, shuffle=False)
+    # for batch_idx, (data, target) in enumerate(loader):
+    #     data, target = data.to(device), target.to(device)
 
     train_set = StreamDataset()
     train_loader = torch.utils.data.DataLoader(train_set, batch_size=args.batch_size, shuffle=False)

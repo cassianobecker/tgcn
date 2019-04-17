@@ -8,6 +8,31 @@ import scipy.sparse
 import matplotlib.pyplot as plt
 import pickle
 import re
+from util.path import get_root
+import scipy.io as sio
+
+
+def load_strucutural(subjects, file_url):
+
+    strut = sio.loadmat(file_url).get('strut')
+    strut_subs = [strut[0][0][2][i][0][0] for i in range(len(strut[0][0][2]))]
+
+    S = list()
+
+    for subject in subjects:
+        idx_subj = strut_subs.index(subject)
+        Si = strut[0][0][1][idx_subj][0]
+        S.append(scipy.sparse.csr_matrix(Si))
+
+    return S
+
+
+def load_subjects(list_url):
+
+    with open(list_url, 'r') as f:
+        subjects = [s.strip() for s in f.readlines()]
+
+    return subjects
 
 
 def process_all(base_dir, parc, subjects, tasks):
@@ -47,6 +72,41 @@ def process_all(base_dir, parc, subjects, tasks):
     subjects_data[subject] = data
 
     return subjects_data
+
+
+def process_subject(base_dir, parc, subject, tasks, db_url):
+
+    data = dict()
+
+
+    print('Processing subject {}'.format(subject))
+    task_list = dict()
+
+    for task in tasks:
+        print('\n--- task {} ...'.format(task))
+
+        task_dict = dict()
+
+        ts = get_ts(subject, task, parc, base_dir)
+
+        cues = get_all_cue_times(subject, task, base_dir)
+
+        cue_arr = np.zeros((5, 284))
+
+        heart, resp = get_vitals(subject, task, base_dir)
+
+        task_dict['ts'] = ts
+        task_dict['cues'] = cues
+        task_dict['heart'] = heart
+        task_dict['resp'] = resp
+
+        task_list[task] = task_dict
+
+    data['functional'] = task_list
+
+    data['adj'] = get_adj(subject, parc, base_dir)
+
+    return data
 
 
 def get_ts(subject, task, parc, base_dir):
@@ -101,7 +161,7 @@ def get_all_cue_times(subject, task, base_dir):
 
     print("done.")
 
-    return cues    
+    return cues
 
 
 def get_parcellation(parc, subject, base_dir):
@@ -313,7 +373,7 @@ def get_adj_mesh(subject, base_dir):
 
     print("\n--- mesh adjacency matrix...")
 
-    inflation = 'white'
+    inflation = 'inflated' #'white'
 
     print("  processing left hemisphere edges...", end="", flush=True)
     hemi = 'L'
@@ -337,7 +397,7 @@ def get_adj_mesh(subject, base_dir):
 
 def load_parcs():
 
-    base_dir = '/Users/cassiano/Desktop/datasets/1subject/'
+    base_dir = '/home/semo/data_dense'
     tasks = ['MOTOR_LR']
     subjects = ['100307']
 
@@ -401,6 +461,8 @@ def save():
     # base subjects folder
     base_dir = '/Users/cassiano/Desktop/datasets/1subject/'
 
+    # parcellation
+    parc = 'aparc'
     # tasks
     tasks = ['MOTOR_LR', 'MOTOR_RL']
 
@@ -413,12 +475,18 @@ def save():
     # shortens the list
     n_subjects = 1
     subjects[0:n_subjects]
+    # subjects = ['100307']
 
     # processes all subjects and tasks
     data = process_all(base_dir, parc, subjects, tasks, db_url)
 
     # persists file
     pickle.dump(data, open(db_url, 'wb'))
+
+    # loads file to verify
+    del data
+    data = pickle.load(open(db_url, 'rb'))
+    data['100307']['MOTOR_RL']['cues']['rf']
 
 
 if __name__ == '__main__':
