@@ -8,7 +8,7 @@ from sklearn.metrics import confusion_matrix, classification_report
 import torch
 import gcn.coarsening as coarsening
 from load.create_hcp import process_subject, load_strucutural, load_subjects
-from sys import getsizeof
+import boto3
 
 
 def get_cues(MOTOR):
@@ -299,11 +299,10 @@ class Encode(object):
         self.H = H
         self.Gp = Gp
         self.Gn = Gn
-        self.perm = perm
 
-    def __call__(self, C, X):
+    def __call__(self, C, X, perm):
         Xw, y = encode(C, X, self.H, self.Gp, self.Gn)
-        Xw = perm_data_time(Xw, self.perm)
+        Xw = perm_data_time(Xw, perm)
 
         one_hot = lambda x, k: np.array(x[:, None] == np.arange(k)[None, :], dtype=int)
         k = np.max(np.unique(y))
@@ -314,14 +313,13 @@ class Encode(object):
 
 class EncodePerm(object):
 
-    def __init__(self, H, Gp, Gn, perm):
+    def __init__(self, H, Gp, Gn):
         self.H = H
         self.Gp = Gp
         self.Gn = Gn
-        self.perm = perm
 
-    def __call__(self, C, X):
-        Xw, y = encode_perm(C, X, self.H, self.Gp, self.Gn, self.perm)
+    def __call__(self, C, X, perm):
+        Xw, y = encode_perm(C, X, self.H, self.Gp, self.Gn, perm)
 
         one_hot = lambda x, k: np.array(x[:, None] == np.arange(k)[None, :], dtype=int)
         k = np.max(np.unique(y))
@@ -422,25 +420,27 @@ class TestDataset(torch.utils.data.Dataset):
 
 class FullDataset(torch.utils.data.Dataset):
 
-    def __init__(self):
+    def __init__(self, device, data_type='dense', test=False):
+
         normalized_laplacian = True
-        coarsening_levels = 4
+        self.coarsening_levels = 4
+        self.data_type = data_type
 
-        list_file = 'subjects_inter.txt'
-        list_url = os.path.join(get_root(), 'conf', list_file)
-        subjects_strut = load_subjects(list_url)
+        s3 = boto3.resource('s3')
 
-        structural_file = 'struct_dti.mat'
-        structural_url = os.path.join(get_root(), 'load', 'hcpdata', structural_file)
-        S = load_strucutural(subjects_strut, structural_url)
-        S = S[0]
+        bucket = s3.Bucket('hcp-openaccess')
+        prefix = 'HCP_1200'
 
-        self.graphs, self.perm = coarsening.coarsen(S, levels=coarsening_levels, self_connections=False)
+        for obj in bucket.objects.filter(Prefix=prefix):
+            print('{0}:{1}'.format(bucket.name, obj.key))
 
         #############
 
         self.list_file = 'subjects.txt'
-        list_url = os.path.join(get_root(), 'conf/hcp/train/motor_lr', self.list_file)
+        if test:
+            list_url = os.path.join(get_root(), 'conf/hcp/train/motor_lr', self.list_file)
+        else:
+            list_url = os.path.join(get_root(), 'conf/hcp/train/motor_lr', self.list_file)
 
         self.data_path = os.path.join(expanduser("~"), 'data_dense')
         #self.data_path = os.path.join(get_root(), 'load/hcpdense')
@@ -451,33 +451,32 @@ class FullDataset(torch.utils.data.Dataset):
         self.T = 284
         self.session = 'MOTOR_LR'
 
-        self.transform = EncodePerm(15, 4, 4, self.perm)
-
-    def get_graphs(self, device):
-        coos = [torch.tensor([graph.tocoo().row, graph.tocoo().col], dtype=torch.long).to(device) for graph in self.graphs]
-        return self.graphs, coos, self.perm
+        self.transform = EncodePerm(15, 4, 4)
+        self.device = device
 
     def __len__(self):
         return len(self.subjects)
 
     def __getitem__(self, idx):
-        file = os.path.join(self.data_path, self.subjects[idx])
+        #file = os.path.join(self.data_path, self.subjects[idx])
 
         subject = self.subjects[idx]
 
-        data = process_subject(self.data_path, 'aparc', subject, [self.session], None)
+        data = process_subject(self.data_path, self.data_type, subject, [self.session], None)
 
-        ds = sio.loadmat(file).get('ds')
-        MOTOR = ds[0, 0][self.session]
+        cues = data['functional']['MOTOR_LR']['cues']
+        ts = data['functional']['MOTOR_LR']['ts']
+        S = data['adj']
 
-        C_i = np.expand_dims(get_cues(MOTOR), 0)
-        X_i = np.expand_dims(get_bold(MOTOR).transpose(), 0)
+        graphs, perm = coarsening.coarsen(S, levels=self.coarsening_levels, self_connections=False)
+        coos = [torch.tensor([graph.tocoo().row, graph.tocoo().col], dtype=torch.long).to(self.device) for graph in graphs]
 
-        #X_i = np.random.rand(1, 65000, 284)
+        C_i = np.expand_dims(cues, 0)
+        X_i = np.expand_dims(ts, 0)
 
-        Xw, yoh = self.transform(C_i, X_i)
+        Xw, yoh = self.transform(C_i, X_i, perm)
 
-        return Xw, yoh
+        return Xw, yoh, coos, perm
 
 
 def get_lookback_data(X, y, lookback=5):

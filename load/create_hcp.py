@@ -91,12 +91,17 @@ def process_subject(base_dir, parc, subject, tasks, db_url):
 
         cues = get_all_cue_times(subject, task, base_dir)
 
-        cue_arr = np.zeros((5, 284))
+        cue_list = [cues['lf'], cues['lh'], cues['rf'], cues['rh'], cues['t']]
+        cue_arr = np.zeros((5, 284), dtype=int)
+        for i in range(len(cue_list)):
+            limb = cue_list[i]
+            for j in limb:
+                cue_arr[i, j] = 1
 
         heart, resp = get_vitals(subject, task, base_dir)
 
         task_dict['ts'] = ts
-        task_dict['cues'] = cues
+        task_dict['cues'] = cue_arr
         task_dict['heart'] = heart
         task_dict['resp'] = resp
 
@@ -104,7 +109,7 @@ def process_subject(base_dir, parc, subject, tasks, db_url):
 
     data['functional'] = task_list
 
-    data['adj'] = get_adj(subject, parc, base_dir)
+    data['adj'] = get_adj(subject, parc, base_dir).tocsr()
 
     return data
 

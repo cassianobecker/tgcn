@@ -105,22 +105,27 @@ class NetTGCN(torch.nn.Module):
 
 
 class NetTGCNBasic(torch.nn.Module):
-    def __init__(self, graphs, coos):
+    def __init__(self, mat_size):
         super(NetTGCNBasic, self).__init__()
 
         f1, g1, k1, h1 = 1, 64, 25, 15
         self.conv1 = ChebTimeConv(f1, g1, K=k1, H=h1)
 
-        n2 = graphs[0].shape[0]
+        n2 = mat_size
 
         c = 6
         self.fc1 = torch.nn.Linear(int(n2 * g1), c)
 
+        self.coos = None
+        self.perm = None
+
+    def add_graph(self, coos, perm):
         self.coos = coos
+        self.perm = perm
 
     def forward(self, x):
         #x = torch.tensor(npa.real(npa.fft.fft(x.to('cpu').numpy(), axis=2))).to('cuda')
-        x, edge_index = x, self.coos[0].to(x.device)
+        x, edge_index = x, self.coos[0]#.to(x.device)
         x = self.conv1(x, edge_index)
 
         x = F.relu(x)
@@ -268,18 +273,20 @@ def train_minibatch(args, model, device, train_loader, optimizer, epoch, verbose
     train_loss = 0
     model.train()
     minibatch = 10
-    for batch_idx, (data, target) in enumerate(train_loader):
+    for batch_idx, (data, target, coos, perm) in enumerate(train_loader):
         #data, target = data.to(device), target.to(device)
         #F = 1024 ** 2
         #print('Bytes of Data: {:1.4f} MB.'.format(getsizeof(data) / F))
-        ctr = 0
+        coos = [c[0].to(device) for c in coos]
+        #ctr = 0
         target = target.to(device)
         temp_loss = 0
+        model.module.add_graph(coos, perm)
 
         for i in range(len(data)):
             optimizer.zero_grad()
-            output = model(data[ctr].to(device))
-            expected = torch.argmax(target[:, ctr], dim=1)
+            output = model(data[i].to(device))
+            expected = torch.argmax(target[:, i], dim=1)
             k = 1.
             w = torch.tensor([1., k, k, k, k, k]).to(device)
             loss = F.nll_loss(output, expected, weight=w)
@@ -297,7 +304,7 @@ def train_minibatch(args, model, device, train_loader, optimizer, epoch, verbose
             if batch_idx % minibatch == 0:
                 optimizer.step()
 
-            ctr += 1
+            #ctr += 1
 
         if verbose:
             if batch_idx % args.log_interval == 0:
@@ -316,17 +323,25 @@ def test(args, model, device, test_loader, t1, epoch):
     preds = torch.empty(0, dtype=torch.long).to(device)
     targets = torch.empty(0, dtype=torch.long).to(device)
     with torch.no_grad():
-        for data_t, target_t in test_loader:
-            data = data_t[0].to(device)
-            target = target_t[0].to(device)
-            output = model(data)
-            #output = holdout_delabeled(model, data)
-            target = torch.argmax(target, dim=1)
-            test_loss += F.nll_loss(output, target, reduction='sum').item()  # sum up batch loss
-            pred = output.max(1, keepdim=True)[1]  # get the index of the max log-probability
-            preds = torch.cat((pred, preds))
-            targets = torch.cat((target, targets))
-            correct += pred.eq(target.view_as(pred)).sum().item()
+        for data_t, target_t, coos, perm in test_loader:
+            coos = [c[0].to(device) for c in coos]
+            #data = data_t[0].to(device)
+            target = target_t.to(device)
+
+            model.module.add_graph(coos, perm)
+            for i in range(len(target)):
+                output = model(data_t[i].to(device))
+                expected = torch.argmax(target[:, i], dim=1)
+                test_loss += F.nll_loss(output, expected, reduction='sum').item()
+                pred = output.max(1, keepdim=True)[1]  # get the index of the max log-probability
+                preds = torch.cat((pred, preds))
+                targets = torch.cat((expected, targets))
+                correct += pred.eq(expected.view_as(pred)).sum().item()
+
+            #output = model(data)
+            #target = torch.argmax(target, dim=1)
+            #test_loss += F.nll_loss(output, expected, reduction='sum').item()  # sum up batch loss
+
 
     test_loss /= (len(test_loader.dataset) * 270)
 
@@ -439,17 +454,21 @@ def main():
 
 
     # kwargs = {'num_workers': 1, 'pin_memory': True} if use_cuda else {}
+    data_type = 'dense'
+    if data_type == 'dense':
+        mat_size = 77712
 
-    # lalaland = FullDataset()
-    # loader = torch.utils.data.DataLoader(lalaland, batch_size=args.batch_size, shuffle=False)
-    # for batch_idx, (data, target) in enumerate(loader):
-    #     data, target = data.to(device), target.to(device)
-
-    train_set = StreamDataset()
+    train_set = FullDataset(device, data_type, test=False)
     train_loader = torch.utils.data.DataLoader(train_set, batch_size=args.batch_size, shuffle=False)
-    graphs, coos, perm = train_set.get_graphs(device)
+    #for batch_idx, (data, target, coos, perm) in enumerate(train_loader):
+    #    data, target = data.to(device), target.to(device)
 
-    test_set = TestDataset(perm)
+
+    # train_set = StreamDataset()
+    # train_loader = torch.utils.data.DataLoader(train_set, batch_size=args.batch_size, shuffle=False)
+    # graphs, coos, perm = train_set.get_graphs(device)
+
+    test_set = FullDataset(device, test=True)
     test_loader = torch.utils.data.DataLoader(test_set, batch_size=args.batch_size, shuffle=False)
 
     # graphs, coos, train_images, test_images, train_labels, test_labels = load_hcp_tcgn(device)
@@ -461,7 +480,7 @@ def main():
     # test_loader = torch.utils.data.DataLoader(validation_set, batch_size=args.batch_size, shuffle=False)
 
 
-    model = NetTGCNBasic(graphs, coos)
+    model = NetTGCNBasic(mat_size)
     #model = NetMLP(int(graphs[0].shape[0] * 15))
 
     if torch.cuda.device_count() > 1:
@@ -476,7 +495,7 @@ def main():
     scheduler = torch.optim.lr_scheduler.ExponentialLR(optimizer, gamma=0.95)
     for epoch in range(1, args.epochs + 1):
         t1 = time.time()
-        train_loss = train(args, model, device, train_loader, optimizer, epoch, verbose=True)
+        train_loss = train_minibatch(args, model, device, train_loader, optimizer, epoch, verbose=True)
         scheduler.step()
         test_loss, correct = test(args, model, device, test_loader, t1, epoch)
 
