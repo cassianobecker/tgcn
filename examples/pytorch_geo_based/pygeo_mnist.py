@@ -6,7 +6,6 @@ import torch_geometric.transforms as T
 #from torch_geometric.nn import GCNConv, ChebConv  # noqa
 import argparse
 import torch
-import torch.utils.data
 import torch.nn.functional as F
 import torch.optim as optim
 import numpy as np
@@ -19,15 +18,331 @@ from torch.nn import Parameter
 from torch_sparse import spmm
 from torch_geometric.utils import degree, remove_self_loops
 import math
+from torch_scatter import scatter_add
 import autograd.numpy as npa
-from tgcn.nn.gcn import gcn_pool, gcn_pool_4, ChebConv, ChebTimeConv
+
+
+def spmm(index, value, m, matrix):
+    """Matrix product of sparse matrix with dense matrix.
+
+    Args:
+        index (:class:`LongTensor`): The index tensor of sparse matrix.
+        value (:class:`Tensor`): The value tensor of sparse matrix.
+        m (int): The first dimension of sparse matrix.
+        matrix (:class:`Tensor`): The dense matrix.
+
+    :rtype: :class:`Tensor`
+    """
+
+    row, col = index
+    matrix = matrix if matrix.dim() > 1 else matrix.unsqueeze(-1)
+
+    out = matrix[col]
+    out = out.permute(-1, 0) * value
+    out = out.permute(-1, 0)
+    out = scatter_add(out, row, dim=0, dim_size=m)
+
+    return out
+
+
+def spmm_batch_2(index, value, m, matrix):
+    """Matrix product of sparse matrix with dense matrix.
+
+    Args:
+        index (:class:`LongTensor`): The index tensor of sparse matrix.
+        value (:class:`Tensor`): The value tensor of sparse matrix.
+        m (int): The first dimension of sparse matrix.
+        matrix (:class:`Tensor`): The dense matrix.
+
+    :rtype: :class:`Tensor`
+    """
+
+    row, col = index
+    matrix = matrix if matrix.dim() > 1 else matrix.unsqueeze(-1)
+
+    out = matrix[:, col]
+    try:
+        sh = out.shape[2]
+    except:
+        out = out.unsqueeze(-1)
+        sh = 1
+
+    #out = out.permute(1, 2, 0)
+    #out = torch.mul(out, value.repeat(-1, sh))
+    #out = out.permute(1, 2, 0)
+    temp = value.expand(sh, value.shape[0]).permute(1, 0)
+    out = torch.einsum("abc,bc->abc", out, temp)
+    out = scatter_add(out, row, dim=1, dim_size=m)
+
+    return out
+
+
+def spmm_batch_3(index, value, m, matrix):
+    """Matrix product of sparse matrix with dense matrix.
+
+    Args:
+        index (:class:`LongTensor`): The index tensor of sparse matrix.
+        value (:class:`Tensor`): The value tensor of sparse matrix.
+        m (int): The first dimension of sparse matrix.
+        matrix (:class:`Tensor`): The dense matrix.
+
+    :rtype: :class:`Tensor`
+    """
+
+    row, col = index
+    matrix = matrix if matrix.dim() > 1 else matrix.unsqueeze(-1)
+
+    out = matrix[:, col]
+    try:
+        sh = out.shape[3:]
+        sh = matrix.shape[2:]
+    except:
+        out = out.unsqueeze(-1)
+        sh = matrix.shape[2:]
+
+    #out = out.permute(1, 2, 0)
+    #out = torch.mul(out, value.repeat(-1, sh))
+    #out = out.permute(1, 2, 0)
+    sh = sh + (value.shape[0],)
+    temp = value.expand(sh)
+    temp = temp.permute(2, 0, 1)
+    out = torch.einsum("abcd,bcd->abcd", out, temp)
+    out = scatter_add(out, row, dim=1, dim_size=m)
+
+    return out
+
+
+def gcn_pool_4(x):
+    x = torch.reshape(x, [x.shape[0], int(x.shape[1] / 4), 4, x.shape[2]])
+    x = torch.max(x, dim=2)[0]
+    return x
+
+
+class ChebConv(torch.nn.Module):
+    r"""The chebyshev spectral graph convolutional operator from the
+    `"Convolutional Neural Networks on Graphs with Fast Localized Spectral
+    Filtering" <https://arxiv.org/abs/1606.09375>`_ paper
+
+    .. math::
+        \mathbf{X}^{\prime} = \sum_{k=0}^{K-1} \mathbf{\hat{X}}_k \cdot
+        \mathbf{\Theta}_k
+
+    where :math:`\mathbf{\hat{X}}_k` is computed recursively by
+
+    .. math::
+        \mathbf{\hat{X}}_0 &= \mathbf{X}
+
+        \mathbf{\hat{X}}_1 &= \mathbf{\hat{L}} \cdot \mathbf{X}
+
+        \mathbf{\hat{X}}_k &= 2 \cdot \mathbf{\hat{L}} \cdot
+        \mathbf{\hat{X}}_{k-1} - \mathbf{\hat{X}}_{k-2}
+
+    and :math:`\mathbf{\hat{L}}` denotes the scaled and normalized Laplacian.
+
+    Args:
+        in_channels (int): Size of each input sample.
+        out_channels (int): Size of each output sample.
+        K (int): Chebyshev filter size, *i.e.* number of hops.
+        bias (bool, optional): If set to :obj:`False`, the layer will not learn
+            an additive bias. (default: :obj:`True`)
+    """
+
+    def __init__(self, in_channels, out_channels, K, bias=True):
+        super(ChebConv, self).__init__()
+
+        self.in_channels = in_channels
+        self.out_channels = out_channels
+        self.weight = Parameter(torch.Tensor(K, in_channels, out_channels))
+
+        if bias:
+            self.bias = Parameter(torch.Tensor(out_channels))
+        else:
+            self.register_parameter('bias', None)
+
+        self.reset_parameters()
+
+    def reset_parameters(self):
+        size = self.in_channels * self.weight.size(0)
+        uniform(size, self.weight)
+        uniform(size, self.bias)
+
+    def forward(self, x, edge_index, edge_weight=None):
+        """"""
+        edge_index, edge_weight = remove_self_loops(edge_index, edge_weight)
+
+        row, col = edge_index
+        num_nodes, num_edges, K = x.size(1), row.size(0), self.weight.size(0)
+
+        if edge_weight is None:
+            edge_weight = x.new_ones((num_edges, ))
+        edge_weight = edge_weight.view(-1)
+        assert edge_weight.size(0) == edge_index.size(1)
+
+        deg = degree(row, num_nodes, dtype=x.dtype)
+
+        # Compute normalized and rescaled Laplacian.
+        deg = deg.pow(-0.5)
+        deg[deg == float('inf')] = 0
+        lap = -deg[row] * edge_weight * deg[col]
+
+        # Perform filter operation recurrently.
+        if len(x.shape) < 3:
+            Tx_0 = x.unsqueeze(-1)
+        else:
+            Tx_0 = x
+        out = torch.matmul(Tx_0, self.weight[0])
+
+        if K > 1:
+            Tx_1 = spmm_batch_2(edge_index, lap, num_nodes, Tx_0)
+            #Tx_1 = torch.stack([spmm(edge_index, lap, num_nodes, Tx_0[i]) for i in range(x.shape[0])])
+            out = out + torch.matmul(Tx_1, self.weight[1])
+
+        for k in range(2, K):
+            temp = spmm_batch_2(edge_index, lap, num_nodes, Tx_1)
+            #temp = torch.stack([spmm(edge_index, lap, num_nodes, Tx_1[i]) for i in range(x.shape[0])])
+            Tx_2 = 2 * temp - Tx_0
+            out = out + torch.matmul(Tx_2, self.weight[k])
+            Tx_0, Tx_1 = Tx_1, Tx_2
+
+        if self.bias is not None:
+            out = out + self.bias
+
+        return out
+
+    def __repr__(self):
+        return '{}({}, {}, K={})'.format(self.__class__.__name__,
+                                         self.in_channels, self.out_channels,
+                                         self.weight.size(0))
+
+
+class ChebTimeConv(torch.nn.Module):
+    r"""The chebyshev spectral graph convolutional operator from the
+    `"Convolutional Neural Networks on Graphs with Fast Localized Spectral
+    Filtering" <https://arxiv.org/abs/1606.09375>`_ paper
+
+    .. math::
+        \mathbf{X}^{\prime} = \sum_{k=0}^{K-1} \mathbf{\hat{X}}_k \cdot
+        \mathbf{\Theta}_k
+
+    where :math:`\mathbf{\hat{X}}_k` is computed recursively by
+
+    .. math::
+        \mathbf{\hat{X}}_0 &= \mathbf{X}
+
+        \mathbf{\hat{X}}_1 &= \mathbf{\hat{L}} \cdot \mathbf{X}
+
+        \mathbf{\hat{X}}_k &= 2 \cdot \mathbf{\hat{L}} \cdot
+        \mathbf{\hat{X}}_{k-1} - \mathbf{\hat{X}}_{k-2}
+
+    and :math:`\mathbf{\hat{L}}` denotes the scaled and normalized Laplacian.
+
+    Args:
+        in_channels (int): Size of each input sample.
+        out_channels (int): Size of each output sample.
+        K (int): Chebyshev filter size, *i.e.* number of hops.
+        bias (bool, optional): If set to :obj:`False`, the layer will not learn
+            an additive bias. (default: :obj:`True`)
+    """
+
+    def __init__(self, in_channels, out_channels, K, H, bias=True):
+        super(ChebTimeConv, self).__init__()
+
+        self.in_channels = in_channels
+        self.out_channels = out_channels
+        self.weight = Parameter(torch.Tensor(K, H, in_channels, out_channels))
+
+        if bias:
+            self.bias = Parameter(torch.Tensor(out_channels))
+        else:
+            self.register_parameter('bias', None)
+
+        self.reset_parameters()
+
+    def reset_parameters(self):
+        size = self.in_channels * self.weight.size(0)
+        uniform(size, self.weight)
+        uniform(size, self.bias)
+
+    def forward(self, x, edge_index, edge_weight=None):
+        """"""
+        edge_index, edge_weight = remove_self_loops(edge_index, edge_weight)
+
+        row, col = edge_index
+        num_nodes, num_edges, K = x.size(1), row.size(0), self.weight.size(0)
+
+        if edge_weight is None:
+            edge_weight = x.new_ones((num_edges, ))
+        edge_weight = edge_weight.view(-1)
+        assert edge_weight.size(0) == edge_index.size(1)
+
+        deg = degree(row, num_nodes, dtype=x.dtype)
+
+        # Compute normalized and rescaled Laplacian.
+        deg = deg.pow(-0.5)
+        deg[deg == float('inf')] = 0
+        lap = -deg[row] * edge_weight * deg[col]
+
+        # Perform filter operation recurrently.
+        if len(x.shape) < 4:
+            Tx_0 = x.unsqueeze(-1)
+        else:
+            Tx_0 = x
+        #out = torch.matmul(Tx_0, self.weight[0])
+        out = torch.einsum("qnhf,hfg->qng", Tx_0, self.weight[0])
+
+        if K > 1:
+            Tx_1 = spmm_batch_3(edge_index, lap, num_nodes, Tx_0)
+            out = out + torch.einsum("qnhf,hfg->qng", Tx_1, self.weight[1])
+
+        for k in range(2, K):
+            temp = spmm_batch_3(edge_index, lap, num_nodes, Tx_1)
+            Tx_2 = 2 * temp - Tx_0
+            out = out + torch.einsum("qnhf,hfg->qng", Tx_2, self.weight[k])
+            Tx_0, Tx_1 = Tx_1, Tx_2
+
+        if self.bias is not None:
+            out = out + self.bias
+
+        return out
+
+    def __repr__(self):
+        return '{}({}, {}, K={})'.format(self.__class__.__name__,
+                                         self.in_channels, self.out_channels,
+                                         self.weight.size(0))
+
+
+def uniform(size, tensor):
+    stdv = 1.0 / math.sqrt(size)
+    if tensor is not None:
+        tensor.data.uniform_(-stdv, stdv)
+
+
+class NetMLP(torch.nn.Module):
+
+    def __init__(self, sh):
+
+        super(NetMLP, self).__init__()
+
+        c = 10
+        self.fc1 = torch.nn.Linear(sh, c)
+
+        d = 10
+        self.fc2 = torch.nn.Linear(c, d)
+
+
+    def forward(self, x):
+        x = x.view(x.shape[0], -1)
+        x = self.fc1(x)
+        #x = F.relu(x)
+        #x = self.fc2(x)
+        return F.log_softmax(x, dim=1)
 
 
 class NetTGCN(torch.nn.Module):
     def __init__(self, graphs, coos):
         super(NetTGCN, self).__init__()
 
-        f1, g1, k1, h1 = 1, 32, 25, 30
+        f1, g1, k1, h1 = 1, 32, 25, 12
         #f1, g1, k1 = 1, 32, 25
         self.conv1 = ChebTimeConv(f1, g1, K=k1, H=h1)
 
@@ -38,7 +353,7 @@ class NetTGCN(torch.nn.Module):
         #self.fc1 = torch.nn.Linear(n1 * g1, 10)
 
         d = 512
-        self.fc1 = torch.nn.Linear(int(n2 * g2), d)
+        self.fc1 = torch.nn.Linear(int(n2 * g2 / 4), d)
 
         # self.drop = nn.Dropout(0)
 
@@ -57,7 +372,7 @@ class NetTGCN(torch.nn.Module):
         edge_index = self.coos[2].to(x.device)
         x = self.conv2(x, edge_index)
         x = F.relu(x)
-        #x = gcn_pool_4(x)
+        x = gcn_pool_4(x)
 
         x = x.view(x.shape[0], -1)
         x = self.fc1(x)
@@ -74,7 +389,14 @@ class NetTGCNBasic(torch.nn.Module):
         self.conv1 = ChebTimeConv(f1, g1, K=k1, H=h1)
 
         n1 = graphs[0].shape[0]
-        self.fc1 = torch.nn.Linear(n1 * g1, 10)
+
+        d = 10
+        self.fc1 = torch.nn.Linear(int(n1 * g1), d)
+
+        # self.drop = nn.Dropout(0)
+
+        c = 10
+        self.fc2 = torch.nn.Linear(d, c)
 
         self.coos = coos
 
@@ -86,6 +408,8 @@ class NetTGCNBasic(torch.nn.Module):
 
         x = x.view(x.shape[0], -1)
         x = self.fc1(x)
+        #x = F.relu(x)
+        #x = self.fc2(x)
         return F.log_softmax(x, dim=1)
 
 
@@ -122,9 +446,6 @@ def get_mnist_data_tgcn(perm):
     train_data = np.transpose(np.tile(train_data, (H, 1, 1)), axes=[1, 2, 0])
     test_data = np.transpose(np.tile(test_data, (H, 1, 1)), axes=[1, 2, 0])
 
-    #train_data = np.random.rand(train_data.shape[0], len(perm) * len(perm), train_data.shape[2])
-    #test_data = np.random.rand(test_data.shape[0], len(perm) * len(perm), test_data.shape[2])
-
     #idx_train = range(30*512)
     #idx_test = range(10*512)
 
@@ -140,45 +461,12 @@ def get_mnist_data_tgcn(perm):
 
     return train_data, test_data, train_labels, test_labels
 
-
-def get_fake_data_tgcn(perm):
-    M = 9000
-    T = 10
-    H = 30
-    l = len(perm)
-
-    train_data = np.random.rand(M, l, H)
-    test_data = np.random.rand(T, l, H)
-
-    train_data = perm_data_time(train_data, perm)
-    test_data = perm_data_time(test_data, perm)
-
-    train_labels = np.random.randint(0, 5, M)
-    test_labels = np.random.randint(0, 5, T)
-
-    one_hot = lambda x, k: np.array(x[:, None] == np.arange(k)[None, :], dtype=int)
-
-    train_labels = one_hot(train_labels, 10)
-    test_labels = one_hot(test_labels, 10)
-
-    del perm
-
-    return train_data, test_data, train_labels, test_labels
-
-
 def create_graph(device):
-    div = 25
-    N = int(65e3 / div)
-    M = 10
-    H = 30
-    E = 500000 / div
-    d = E / N ** 2  # 0.01
-
     def grid_graph(m, corners=False):
         z = graph.grid(m)
         dist, idx = graph.distance_sklearn_metrics(z, k=number_edges, metric=metric)
         A = graph.adjacency(dist, idx)
-        A = sp.random(A.shape[0], A.shape[0], density=d, format="csr", data_rvs=lambda s: np.random.uniform(0, 0.5, size=s))
+        #A = sp.random(A.shape[0], A.shape[0], density=0.01, format="csr", data_rvs=lambda s: np.random.uniform(0, 0.5, size=s))
         # Connections are only vertical or horizontal on the grid.
         # Corner vertices are connected to 2 neightbors only.
         if corners:
@@ -196,8 +484,7 @@ def create_graph(device):
     normalized_laplacian = True
     coarsening_levels = 4
 
-    #N = 28
-    A = grid_graph(int(math.sqrt(N)), corners=False)
+    A = grid_graph(28, corners=False)
     #A = graph.replace_random_edges(A, 0)
     graphs, perm = coarsening.coarsen(A, levels=coarsening_levels, self_connections=False)
     return graphs, perm
@@ -213,6 +500,7 @@ def grad_norm(model):
 def train(args, model, device, train_loader, optimizer, epoch):
     torch.cuda.synchronize()
     #t1 = time.time()
+    train_loss = 0
     model.train()
     for batch_idx, (data_t, target_t) in enumerate(train_loader):
         data = data_t.to(device)
@@ -221,18 +509,26 @@ def train(args, model, device, train_loader, optimizer, epoch):
         output = model(data)
         target = torch.argmax(target, dim=1)
         loss = F.nll_loss(output, target)
+        train_loss += loss
         for p in model.named_parameters():
             if p[0].split('.')[0][:2] == 'fc':
                 loss = loss + args.reg_weight*(p[1]**2).sum()
         loss.backward()
         optimizer.step()
-        if batch_idx % args.log_interval == 0:
 
-            print('Gradient norm: {:2.4e}'.format(grad_norm(model)))
+    train_loss /= len(train_loader.dataset)
 
-            print('Train Epoch: {} [{}/{} ({:.0f}%)]\tLoss: {:.6f}'.format(
-                epoch, batch_idx * len(data), len(train_loader.dataset),
-                       100. * batch_idx / len(train_loader), loss.item()))
+    print('\nTrain Epoch: {}, Train Loss: {:1.5e}'.format(epoch, train_loss))
+
+
+
+        # if batch_idx % args.log_interval == 0:
+        #
+        #     print('Gradient norm: {:2.4e}'.format(grad_norm(model)))
+        #
+        #     print('Train Epoch: {} [{}/{} ({:.0f}%)]\tLoss: {:.6f}'.format(
+        #         epoch, batch_idx * len(data), len(train_loader.dataset),
+        #                100. * batch_idx / len(train_loader), loss.item()))
 
     torch.cuda.synchronize()
     #t2 = time.time()
@@ -259,7 +555,7 @@ def test(args, model, device, test_loader, epoch):
 
     test_loss /= len(test_loader.dataset)
 
-    print('\nEpoch: {}, AvgLoss: {:.4f}, Accuracy: {:.4f}\n'.format(
+    print('\nEpoch: {}, AvgLoss: {:.4f}, Accuracy: {:.4f}'.format(
         epoch, test_loss, correct / len(test_loader.dataset)))
 
 
@@ -299,7 +595,7 @@ def experiment(args):
     graphs, perm = create_graph(device)
     coos = [torch.tensor([graph.tocoo().row, graph.tocoo().col], dtype=torch.long).to(device) for graph in graphs]
 
-    train_images, test_images, train_labels, test_labels = get_fake_data_tgcn(perm)
+    train_images, test_images, train_labels, test_labels = get_mnist_data_tgcn(perm)
 
     training_set = Dataset(train_images, train_labels)
     train_loader = torch.utils.data.DataLoader(training_set, batch_size=args.batch_size)
@@ -309,7 +605,8 @@ def experiment(args):
 
     #sh = train_images.shape
 
-    model = NetTGCN(graphs, coos)
+    model = NetTGCNBasic(graphs, coos)
+    #model = NetMLP(int(graphs[0].shape[0] * 12))
 
     if torch.cuda.device_count() > 1:
         model = torch.nn.DataParallel(model)
@@ -348,7 +645,7 @@ def main():
                         help='input batch size for training (default: 64)')
     parser.add_argument('--test-batch-size', type=int, default=1000, metavar='N',
                         help='input batch size for testing (default: 1000)')
-    parser.add_argument('--epochs', type=int, default=50, metavar='N',
+    parser.add_argument('--epochs', type=int, default=100, metavar='N',
                         help='number of epochs to train (default: 10)')
     parser.add_argument('--lr', type=float, default=0.001, metavar='LR',
                         help='learning rate (default: 0.01)')

@@ -256,6 +256,26 @@ class Net(torch.nn.Module):
         return F.log_softmax(x, dim=1)
 
 
+class NetMLP(torch.nn.Module):
+
+    def __init__(self, sh):
+
+        super(NetMLP, self).__init__()
+
+        c = 512
+        self.fc1 = torch.nn.Linear(sh, c)
+
+        d = 10
+        self.fc2 = torch.nn.Linear(c, d)
+
+
+    def forward(self, x):
+        x = x.view(x.shape[0], -1)
+        x = self.fc1(x)
+        x = self.fc2(x)
+        return F.log_softmax(x, dim=1)
+
+
 def get_mnist_data_gcn(perm):
 
     N, train_data, train_labels, test_data, test_labels = load_mnist()
@@ -330,13 +350,13 @@ def train(args, model, device, train_loader, optimizer, epoch):
                 loss = loss + args.reg_weight*(p[1]**2).sum()
         loss.backward()
         optimizer.step()
-        if batch_idx % args.log_interval == 0:
-
-            print('Gradient norm: {:2.4e}'.format(grad_norm(model)))
-
-            print('Train Epoch: {} [{}/{} ({:.0f}%)]\tLoss: {:.6f}'.format(
-                epoch, batch_idx * len(data), len(train_loader.dataset),
-                       100. * batch_idx / len(train_loader), loss.item()))
+        # if batch_idx % args.log_interval == 0:
+        #
+        #     print('Gradient norm: {:2.4e}'.format(grad_norm(model)))
+        #
+        #     print('Train Epoch: {} [{}/{} ({:.0f}%)]\tLoss: {:.6f}'.format(
+        #         epoch, batch_idx * len(data), len(train_loader.dataset),
+        #                100. * batch_idx / len(train_loader), loss.item()))
 
     torch.cuda.synchronize()
     #t2 = time.time()
@@ -413,7 +433,9 @@ def experiment(args):
 
     #sh = train_images.shape
 
-    model = Net(graphs, coos)
+    #model = Net(graphs, coos)
+    #model = NetGCNBasic(graphs, coos)
+    model = NetMLP(int(graphs[0].shape[0]))
 
     if torch.cuda.device_count() > 1:
         model = torch.nn.DataParallel(model)
@@ -452,7 +474,7 @@ def main():
                         help='input batch size for training (default: 64)')
     parser.add_argument('--test-batch-size', type=int, default=1000, metavar='N',
                         help='input batch size for testing (default: 1000)')
-    parser.add_argument('--epochs', type=int, default=50, metavar='N',
+    parser.add_argument('--epochs', type=int, default=100, metavar='N',
                         help='number of epochs to train (default: 10)')
     parser.add_argument('--lr', type=float, default=0.001, metavar='LR',
                         help='learning rate (default: 0.01)')

@@ -5,6 +5,10 @@ from util.path import get_root
 import scipy.sparse
 from os.path import expanduser
 from sklearn.metrics import confusion_matrix, classification_report
+import torch
+import gcn.coarsening as coarsening
+from load.create_hcp import process_subject, load_strucutural, load_subjects, HCPDownloader, GitDownloader
+
 
 
 def get_cues(MOTOR):
@@ -79,15 +83,6 @@ def get_delabeled_dataset(filedir, session, p=148, T=284):
     return [C, None, X]
 
 
-def load_subjects(list_url):
-
-    with open(list_url, 'r') as f:
-        subjects = [s.strip() for s in f.readlines()]
-
-    return subjects
-
-
-
 def get_dataset(subjects, data_path, post_fix, session, p=32492, T=284):
 
     # with open(list_url, 'r') as f:
@@ -156,22 +151,7 @@ def encode(C, X, H, Gp, Gn):
     y = np.reshape(y, (num_examples))
     X_windowed = np.reshape(X_windowed, (num_examples, p, H))
 
-    return [X_windowed, y]
-
-
-def load_strucutural(subjects, file_url):
-
-    strut = sio.loadmat(file_url).get('strut')
-    strut_subs = [strut[0][0][2][i][0][0] for i in range(len(strut[0][0][2]))]
-
-    S = list()
-
-    for subject in subjects:
-        idx_subj = strut_subs.index(subject)
-        Si = strut[0][0][1][idx_subj][0]
-        S.append(scipy.sparse.csr_matrix(Si))
-
-    return S
+    return [X_windowed.astype("float32"), y]
 
 
 def load_hcp_example(full=False):
@@ -200,7 +180,7 @@ def load_hcp_example(full=False):
     post_fix = '_aparc_tasks.mat'
 
     if full:
-        data_path = os.path.join(expanduser("~"), 'data_full/aparc')
+        data_path = os.path.join(expanduser("~"), 'data_full')
         post_fix = '_aparc_tasks_aparc.mat'
 
     p = 148
@@ -226,6 +206,275 @@ def load_hcp_example(full=False):
     yoh = one_hot(y, k+1)
 
     return Xw, yoh, S
+
+
+def encode_perm(C, X, H, Gp, Gn, indices):
+    """
+    encodes
+    :param C: data labels
+    :param X: data to be windowed
+    :param H: window size
+    :param Gp: start point guard
+    :param Gn: end point guard
+    :return:
+    """
+    _, m, _ = C.shape
+    Np, p, T = X.shape
+    N = T - H + 1
+    num_examples = Np * N
+
+    X = X.astype('float32')
+    y = np.zeros([Np, N])
+    C_temp = np.zeros(T)
+
+    for i in range(Np):
+        for j in range(m):
+            temp_idx = [idx for idx, e in enumerate(C[i, j, :]) if e == 1]
+            cue_idx1 = [idx - Gn for idx in temp_idx]
+            cue_idx2 = [idx + Gp for idx in temp_idx]
+            cue_idx = list(zip(cue_idx1, cue_idx2))
+
+            for idx in cue_idx:
+                C_temp[slice(*idx)] = j + 1
+
+        y[i, :] = C_temp[0: N]
+
+    X_windowed = [] #np.zeros([Np, N, p, H])
+
+    if indices is None:
+        for t in range(N):
+            X_windowed.append(X[0, :, t: t + H])    #0 because there is always a single example in each batch
+
+        y = np.reshape(y, (num_examples))
+    else:
+        M, Q = X[0].shape
+
+        Mnew = len(indices)
+        assert Mnew >= M
+
+        if Mnew > M:
+            diff = Mnew - M
+            z = np.zeros((X.shape[0], diff, X.shape[2]), dtype="float32")
+            X = np.concatenate((X, z), axis=1)
+
+        for t in range(N):
+            X_windowed.append(X[0, indices, t: t + H])
+
+        y = np.reshape(y, (num_examples))
+
+    #F = 1024 ** 2
+    #print('Bytes of X: {:1.4f} MB.'.format(getsizeof(X_windowed) / F))
+
+    return [X_windowed, y]
+
+
+
+def perm_data_time(x, indices):
+    """
+    Permute data matrix, i.e. exchange node ids,
+    so that binary unions form the clustering tree.
+    """
+    if indices is None:
+        return x
+
+    N, M, Q = x.shape
+    Mnew = len(indices)
+    assert Mnew >= M
+    xnew = np.empty((N, Mnew, Q), dtype="float32")
+    for i,j in enumerate(indices):
+        # Existing vertex, i.e. real data.
+        if j < M:
+            xnew[:, i, :] = x[:, j, :]
+        # Fake vertex because of singeltons.
+        # They will stay 0 so that max pooling chooses the singelton.
+        # Or -infty ?
+        else:
+            xnew[:, i, :] = np.zeros((N, Q))
+    return xnew
+
+
+class Encode(object):
+
+    def __init__(self, H, Gp, Gn, perm):
+        self.H = H
+        self.Gp = Gp
+        self.Gn = Gn
+
+    def __call__(self, C, X, perm):
+        Xw, y = encode(C, X, self.H, self.Gp, self.Gn)
+        Xw = perm_data_time(Xw, perm)
+
+        one_hot = lambda x, k: np.array(x[:, None] == np.arange(k)[None, :], dtype=int)
+        k = np.max(np.unique(y))
+
+        yoh = one_hot(y, k + 1)
+        return Xw, yoh
+
+
+class EncodePerm(object):
+
+    def __init__(self, H, Gp, Gn):
+        self.H = H
+        self.Gp = Gp
+        self.Gn = Gn
+
+    def __call__(self, C, X, perm):
+        Xw, y = encode_perm(C, X, self.H, self.Gp, self.Gn, perm)
+
+        one_hot = lambda x, k: np.array(x[:, None] == np.arange(k)[None, :], dtype=int)
+        k = np.max(np.unique(y))
+
+        yoh = one_hot(y, k + 1)
+        return Xw, yoh
+
+
+class StreamDataset(torch.utils.data.Dataset):
+
+    def __init__(self):
+        normalized_laplacian = True
+        coarsening_levels = 4
+
+        list_file = 'subjects_inter.txt'
+        list_url = os.path.join(get_root(), 'conf', list_file)
+        subjects_strut = load_subjects(list_url)
+
+        structural_file = 'struct_dti.mat'
+        structural_url = os.path.join(get_root(), 'load', 'hcpdata', structural_file)
+        S = load_strucutural(subjects_strut, structural_url)
+        S = S[0]
+
+        #avg_degree = 7
+        #S = scipy.sparse.random(65000, 65000, density=avg_degree/65000, format="csr")
+
+        self.graphs, self.perm = coarsening.coarsen(S, levels=coarsening_levels, self_connections=False)
+
+        self.list_file = 'subjects_hcp_all.txt'
+        list_url = os.path.join(get_root(), 'conf', self.list_file)
+        self.data_path = os.path.join(expanduser("~"), 'data_full')
+
+        self.subjects = load_subjects(list_url)
+        post_fix = '_aparc_tasks_aparc.mat'
+        self.filenames = [s + post_fix for s in self.subjects]
+
+        self.p = 148#65000
+        self.T = 284
+        self.session = 'MOTOR_LR'
+
+        self.transform = EncodePerm(15, 4, 4, self.perm)
+
+    def get_graphs(self, device):
+        coos = [torch.tensor([graph.tocoo().row, graph.tocoo().col], dtype=torch.long).to(device) for graph in self.graphs]
+        return self.graphs, coos, self.perm
+
+    def __len__(self):
+        return len(self.filenames)
+
+    def __getitem__(self, idx):
+        file = os.path.join(self.data_path, self.filenames[idx])
+        ds = sio.loadmat(file).get('ds')
+        MOTOR = ds[0, 0][self.session]
+
+        C_i = np.expand_dims(get_cues(MOTOR), 0)
+        X_i = np.expand_dims(get_bold(MOTOR).transpose(), 0)
+
+        #X_i = np.random.rand(1, 65000, 284)
+
+        Xw, yoh = self.transform(C_i, X_i)
+
+        return Xw, yoh
+
+
+class TestDataset(torch.utils.data.Dataset):
+
+    def __init__(self, perm):
+
+        self.list_file = 'subjects_test.txt'
+        list_url = os.path.join(get_root(), 'conf', self.list_file)
+        self.data_path = os.path.join(expanduser("~"), 'data_full')
+
+        self.subjects = load_subjects(list_url)
+        post_fix = '_aparc_tasks_aparc.mat'
+        self.filenames = [s + post_fix for s in self.subjects]
+
+        self.p = 148
+        self.T = 284
+        self.session = 'MOTOR_LR'
+
+        self.transform = Encode(15, 4, 4, perm)
+
+    def __len__(self):
+        return len(self.filenames)
+
+    def __getitem__(self, idx):
+        file = os.path.join(self.data_path, self.filenames[idx])
+        ds = sio.loadmat(file).get('ds')
+        MOTOR = ds[0, 0][self.session]
+
+        C_i = np.expand_dims(get_cues(MOTOR), 0)
+        X_i = np.expand_dims(get_bold(MOTOR).transpose(), 0)
+
+        Xw, yoh = self.transform(C_i, X_i)
+
+        return Xw.astype('float32'), yoh
+
+
+class FullDataset(torch.utils.data.Dataset):
+
+    def __init__(self, device, settings, data_type='aparc', test=False):
+
+        normalized_laplacian = True
+        self.coarsening_levels = 4
+        self.data_type = data_type
+        self.settings = settings
+        hcp_downloader = HCPDownloader('https://db.humanconnectome.org/data/archive/projects/HCP_1200/subjects/{0}/experiments/{1}_CREST/resources/{2}_CREST/files/MNINonLinear/', settings)
+        git_downloader = GitDownloader('https://github.com/cassianobecker/dtihcp/raw/master/dti/MNINonlinear/')
+        self.loaders = [hcp_downloader, git_downloader]
+
+        #############
+
+        self.list_file = 'subjects.txt'
+        if test:
+            list_url = os.path.join(get_root(), 'conf/hcp/test/motor_lr', self.list_file)
+        else:
+            list_url = os.path.join(get_root(), 'conf/hcp/train/motor_lr', self.list_file)
+
+        #self.data_path = os.path.join(expanduser("~"), 'data_dense')
+
+        self.subjects = load_subjects(list_url)
+
+        self.p = 148
+        self.T = 284
+        self.session = 'MOTOR_LR'
+
+        self.transform = EncodePerm(15, 4, 4)
+        self.device = device
+
+    def __len__(self):
+        return len(self.subjects)
+
+    def __getitem__(self, idx):
+        #file = os.path.join(self.data_path, self.subjects[idx])
+
+        subject = self.subjects[idx]
+
+        data = process_subject(self.data_type, subject, [self.session], self.loaders)
+
+        cues = data['functional']['MOTOR_LR']['cues']
+        ts = data['functional']['MOTOR_LR']['ts']
+        S = data['adj']
+
+        #graphs, perm = coarsening.coarsen(S, levels=self.coarsening_levels, self_connections=False)
+        graphs = [S]
+        perm = list(range(0, S.shape[0]))
+        #perm =
+        coos = [torch.tensor([graph.tocoo().row, graph.tocoo().col], dtype=torch.long).to(self.device) for graph in graphs]
+
+        C_i = np.expand_dims(cues, 0)
+        X_i = np.expand_dims(ts, 0)
+
+        Xw, yoh = self.transform(C_i, X_i, perm)
+
+        return Xw, yoh, coos, perm
 
 
 def get_lookback_data(X, y, lookback=5):
