@@ -426,8 +426,8 @@ class FullDataset(torch.utils.data.Dataset):
         self.coarsening_levels = 4
         self.data_type = data_type
         self.settings = settings
-        hcp_downloader = HCPDownloader('https://db.humanconnectome.org/data/archive/projects/HCP_1200/subjects/{0}/experiments/{1}_CREST/resources/{2}_CREST/files/MNINonLinear/', settings)
-        git_downloader = GitDownloader('https://github.com/cassianobecker/dtihcp/raw/master/dti/MNINonlinear/')
+        hcp_downloader = HCPDownloader(settings)
+        git_downloader = GitDownloader(settings)
         self.loaders = [hcp_downloader, git_downloader]
 
         #############
