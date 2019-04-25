@@ -7,8 +7,8 @@ from os.path import expanduser
 from sklearn.metrics import confusion_matrix, classification_report
 import torch
 import gcn.coarsening as coarsening
-from load.create_hcp import process_subject, load_strucutural, load_subjects
-import boto3
+from load.create_hcp import process_subject, load_strucutural, load_subjects, HCPDownloader, GitDownloader
+
 
 
 def get_cues(MOTOR):
@@ -420,30 +420,25 @@ class TestDataset(torch.utils.data.Dataset):
 
 class FullDataset(torch.utils.data.Dataset):
 
-    def __init__(self, device, data_type='dense', test=False):
+    def __init__(self, device, settings, data_type='aparc', test=False):
 
         normalized_laplacian = True
         self.coarsening_levels = 4
         self.data_type = data_type
-
-        s3 = boto3.resource('s3')
-
-        bucket = s3.Bucket('hcp-openaccess')
-        prefix = 'HCP_1200'
-
-        for obj in bucket.objects.filter(Prefix=prefix):
-            print('{0}:{1}'.format(bucket.name, obj.key))
+        self.settings = settings
+        hcp_downloader = HCPDownloader('https://db.humanconnectome.org/data/archive/projects/HCP_1200/subjects/{0}/experiments/{1}_CREST/resources/{2}_CREST/files/MNINonLinear/', settings)
+        git_downloader = GitDownloader('https://github.com/cassianobecker/dtihcp/raw/master/dti/MNINonlinear/')
+        self.loaders = [hcp_downloader, git_downloader]
 
         #############
 
         self.list_file = 'subjects.txt'
         if test:
-            list_url = os.path.join(get_root(), 'conf/hcp/train/motor_lr', self.list_file)
+            list_url = os.path.join(get_root(), 'conf/hcp/test/motor_lr', self.list_file)
         else:
             list_url = os.path.join(get_root(), 'conf/hcp/train/motor_lr', self.list_file)
 
-        self.data_path = os.path.join(expanduser("~"), 'data_dense')
-        #self.data_path = os.path.join(get_root(), 'load/hcpdense')
+        #self.data_path = os.path.join(expanduser("~"), 'data_dense')
 
         self.subjects = load_subjects(list_url)
 
@@ -462,13 +457,16 @@ class FullDataset(torch.utils.data.Dataset):
 
         subject = self.subjects[idx]
 
-        data = process_subject(self.data_path, self.data_type, subject, [self.session], None)
+        data = process_subject(self.data_type, subject, [self.session], self.loaders)
 
         cues = data['functional']['MOTOR_LR']['cues']
         ts = data['functional']['MOTOR_LR']['ts']
         S = data['adj']
 
-        graphs, perm = coarsening.coarsen(S, levels=self.coarsening_levels, self_connections=False)
+        #graphs, perm = coarsening.coarsen(S, levels=self.coarsening_levels, self_connections=False)
+        graphs = [S]
+        perm = list(range(0, S.shape[0]))
+        #perm =
         coos = [torch.tensor([graph.tocoo().row, graph.tocoo().col], dtype=torch.long).to(self.device) for graph in graphs]
 
         C_i = np.expand_dims(cues, 0)

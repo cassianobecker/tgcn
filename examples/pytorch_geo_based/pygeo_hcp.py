@@ -8,13 +8,14 @@ import torch.nn.functional as F
 import torch.optim as optim
 import numpy as np
 import autograd.numpy as npa
-from load.data_hcp import load_hcp_example, StreamDataset, TestDataset, FullDataset
+from load.data_hcp import load_hcp_example, FullDataset
 import gcn.graph as graph
 import gcn.coarsening as coarsening
 import sklearn.metrics
 import time, math, random, os
 import scipy.sparse as sp
-from sys import getsizeof
+import configparser
+from util.path import get_root
 
 
 class NetMLP(nn.Module):
@@ -45,7 +46,6 @@ class NetMLP(nn.Module):
     def forward(self, x):
         x = x.view(x.shape[0], -1)
         x = self.fc1(x)
-        #x = F.relu(x)
         x = self.fc2(x)
         x = self.fc3(x)
         x = self.fc4(x)
@@ -307,12 +307,12 @@ def train_minibatch(args, model, device, train_loader, optimizer, epoch, verbose
             #ctr += 1
 
         if verbose:
-            if batch_idx % args.log_interval == 0:
-                print('Train Epoch: {} [{}/{} ({:.0f}%)]\tLoss: {:.6f}'.format(
-                    epoch, batch_idx * len(data), len(train_loader.dataset),
-                           100. * batch_idx / len(train_loader), temp_loss.item()))
+            #if batch_idx % args.log_interval == 0:
+            print('Train Epoch: {} [{}/{} ({:.0f}%)]\tLoss: {:.6f}'.format(
+                epoch, batch_idx, len(train_loader.dataset),
+                        100. * batch_idx / len(train_loader.dataset), temp_loss.item()))
 
-    train_loss /= len(train_loader.dataset)
+    train_loss /= (len(train_loader.dataset) * len(data))
     return train_loss
 
 
@@ -329,7 +329,7 @@ def test(args, model, device, test_loader, t1, epoch):
             target = target_t.to(device)
 
             model.module.add_graph(coos, perm)
-            for i in range(len(target)):
+            for i in range(len(data_t)):
                 output = model(data_t[i].to(device))
                 expected = torch.argmax(target[:, i], dim=1)
                 test_loss += F.nll_loss(output, expected, reduction='sum').item()
@@ -343,7 +343,7 @@ def test(args, model, device, test_loader, t1, epoch):
             #test_loss += F.nll_loss(output, expected, reduction='sum').item()  # sum up batch loss
 
 
-    test_loss /= (len(test_loader.dataset) * 270)
+    test_loss /= (len(test_loader.dataset) * len(data_t))
 
     # print('Test Epoch: {} Average loss: {:.4f}, Accuracy: {}/{} ({:.2f}%)'.format(
     #     epoch, test_loss, correct, len(test_loader.dataset),
@@ -451,34 +451,23 @@ def main():
     normalized_laplacian = True
     coarsening_levels = 4
 
+    settings = configparser.ConfigParser()
+    settings_dir = os.path.join(get_root(), 'load/res/hcp_loader.ini')
+    settings.read(settings_dir)
 
 
     # kwargs = {'num_workers': 1, 'pin_memory': True} if use_cuda else {}
-    data_type = 'dense'
+    data_type = 'aparc'
     if data_type == 'dense':
-        mat_size = 77712
+        mat_size = 59412
+    else:
+        mat_size = 148
 
-    train_set = FullDataset(device, data_type, test=False)
+    train_set = FullDataset(device, settings, data_type, test=False)
     train_loader = torch.utils.data.DataLoader(train_set, batch_size=args.batch_size, shuffle=False)
-    #for batch_idx, (data, target, coos, perm) in enumerate(train_loader):
-    #    data, target = data.to(device), target.to(device)
 
-
-    # train_set = StreamDataset()
-    # train_loader = torch.utils.data.DataLoader(train_set, batch_size=args.batch_size, shuffle=False)
-    # graphs, coos, perm = train_set.get_graphs(device)
-
-    test_set = FullDataset(device, test=True)
+    test_set = FullDataset(device, settings, data_type, test=True)
     test_loader = torch.utils.data.DataLoader(test_set, batch_size=args.batch_size, shuffle=False)
-
-    # graphs, coos, train_images, test_images, train_labels, test_labels = load_hcp_tcgn(device)
-    #
-    # training_set = Dataset(train_images, train_labels)
-    # train_loader = torch.utils.data.DataLoader(training_set, batch_size=args.batch_size, shuffle=False)
-    #
-    # validation_set = Dataset(test_images, test_labels)
-    # test_loader = torch.utils.data.DataLoader(validation_set, batch_size=args.batch_size, shuffle=False)
-
 
     model = NetTGCNBasic(mat_size)
     #model = NetMLP(int(graphs[0].shape[0] * 15))
