@@ -61,8 +61,8 @@ class NetGCNBasic(nn.Module):
         super(NetGCNBasic, self).__init__()
 
         L = NetGCNBasic.L
-        f1, g1, k1 = 1, 10, 8 # 1, 64, 25
-        f2, g2, k2 = g1, 20, 4
+        f1, g1, k1 = 1, 6, 3 # 1, 64, 25
+        f2, g2, k2 = g1, 6, 2
         self.gcn1 = GCNCheb(L, f1, g1, k1)
         self.gcn2 = GCNCheb(L, f2, g2, k2)
 
